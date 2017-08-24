@@ -43,7 +43,9 @@ type RaftCluster struct {
 	id    types.ID
 	token string
 
+	// v2 storage
 	store store.Store
+	// mvcc backend
 	be    backend.Backend
 
 	sync.Mutex // guards the fields below
@@ -287,9 +289,13 @@ func (c *RaftCluster) AddMember(m *Member) {
 	c.Lock()
 	defer c.Unlock()
 	if c.store != nil {
+		// key=/members/{id}/raftAttributes
+		// val=raftAttributes
 		mustSaveMemberToStore(c.store, m)
 	}
 	if c.be != nil {
+		// key = {id}
+		// val = member
 		mustSaveMemberToBackend(c.be, m)
 	}
 
@@ -379,6 +385,8 @@ func (c *RaftCluster) SetVersion(ver *semver.Version, onSet func(*semver.Version
 	onSet(ver)
 }
 
+// 假如一个失败的node，那么可能会造成集群不可用，为了避免这种情况，我们
+// 在添加node时需要考虑最坏的情况，因此初始化nmembers=1
 func (c *RaftCluster) IsReadyToAddNewMember() bool {
 	nmembers := 1
 	nstarted := 0

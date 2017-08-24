@@ -32,6 +32,10 @@ type index interface {
 	Insert(ki *keyIndex)
 }
 
+
+
+// B tree
+// 保存的是从key到keyIndex的映射，即从内存到boltdb key的映射
 type treeIndex struct {
 	sync.RWMutex
 	tree *btree.BTree
@@ -39,7 +43,7 @@ type treeIndex struct {
 
 func newTreeIndex() index {
 	return &treeIndex{
-		tree: btree.New(32),
+		tree: btree.New(32), // degree=64，即最多有64个child，最少有32个child
 	}
 }
 
@@ -150,6 +154,7 @@ func (ti *treeIndex) RangeSince(key, end []byte, rev int64) []revision {
 	return revs
 }
 
+// 遍历一遍B tree，以rev为标准压缩所有key
 func (ti *treeIndex) Compact(rev int64) map[revision]struct{} {
 	available := make(map[revision]struct{})
 	var emptyki []*keyIndex
@@ -159,6 +164,7 @@ func (ti *treeIndex) Compact(rev int64) map[revision]struct{} {
 	ti.Lock()
 	defer ti.Unlock()
 	ti.tree.Ascend(compactIndex(rev, available, &emptyki))
+	// 删除空了的keyIndex
 	for _, ki := range emptyki {
 		item := ti.tree.Delete(ki)
 		if item == nil {

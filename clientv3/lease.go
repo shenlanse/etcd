@@ -152,7 +152,9 @@ func NewLease(c *Client) Lease {
 	}
 
 	l.stopCtx, l.stopCancel = context.WithCancel(context.Background())
+	// open a lease stream and constantly receive lease response from it
 	go l.recvKeepAliveLoop()
+	// delete timeout lease
 	go l.deadlineLoop()
 	return l
 }
@@ -342,6 +344,8 @@ func (l *lessor) keepAliveOnce(ctx context.Context, id LeaseID) (*LeaseKeepAlive
 	return karesp, nil
 }
 
+// 打开一个lease stream
+// 然后从stream中不断读取response
 func (l *lessor) recvKeepAliveLoop() (gerr error) {
 	defer func() {
 		l.mu.Lock()
@@ -353,9 +357,10 @@ func (l *lessor) recvKeepAliveLoop() (gerr error) {
 		l.keepAlives = make(map[LeaseID]*keepAlive)
 		l.mu.Unlock()
 	}()
-
+	// opens a new lease stream, and constantly send lease requests
 	stream, serr := l.resetRecv()
 	for serr == nil {
+		// constantly receive lease responses
 		resp, err := stream.Recv()
 		if err != nil {
 			if isHaltErr(l.stopCtx, err) {

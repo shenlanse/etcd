@@ -59,8 +59,10 @@ type streamType string
 func (t streamType) endpoint() string {
 	switch t {
 	case streamTypeMsgAppV2:
+		// /raft/stream/msgapp
 		return path.Join(RaftStreamPrefix, "msgapp")
 	case streamTypeMessage:
+		// /raft/stream/message
 		return path.Join(RaftStreamPrefix, "message")
 	default:
 		plog.Panicf("unhandled stream type %v", t)
@@ -83,6 +85,7 @@ var (
 	// linkHeartbeatMessage is a special message used as heartbeat message in
 	// link layer. It never conflicts with messages from raft because raft
 	// doesn't send out messages without From and To fields.
+	// 和raft没关系。实现心跳探活的
 	linkHeartbeatMessage = raftpb.Message{Type: raftpb.MsgHeartbeat}
 )
 
@@ -92,14 +95,14 @@ func isLinkHeartbeatMessage(m *raftpb.Message) bool {
 
 type outgoingConn struct {
 	t streamType
-	io.Writer
+	io.Writer  // http writer
 	http.Flusher
 	io.Closer
 }
 
 // streamWriter writes messages to the attached outgoingConn.
 type streamWriter struct {
-	peerID types.ID
+	peerID types.ID  // remote peer ID
 	status *peerStatus
 	fs     *stats.FollowerStats
 	r      Raft
@@ -186,6 +189,7 @@ func (cw *streamWriter) run() {
 			cw.close()
 			plog.Warningf("lost the TCP streaming connection with peer %s (%s writer)", cw.peerID, t)
 			heartbeatc, msgc = nil, nil
+			// 发给raft状态机，转变为probe状态，限制发送速率
 			cw.r.ReportUnreachable(m.To)
 			sentFailures.WithLabelValues(cw.peerID.String()).Inc()
 
@@ -272,6 +276,7 @@ type streamReader struct {
 	tr     *Transport
 	picker *urlPicker
 	status *peerStatus
+	// peer chan 的引用，大小为4096
 	recvc  chan<- raftpb.Message
 	propc  chan<- raftpb.Message
 
@@ -286,6 +291,8 @@ type streamReader struct {
 	done  chan struct{}
 }
 
+
+//  /raft/stream/message/{remote_peer}
 func (r *streamReader) start() {
 	r.stopc = make(chan struct{})
 	r.done = make(chan struct{})
@@ -411,6 +418,7 @@ func (cr *streamReader) stop() {
 func (cr *streamReader) dial(t streamType) (io.ReadCloser, error) {
 	u := cr.picker.pick()
 	uu := u
+	// /raft/stream/message/{local_peer_id}
 	uu.Path = path.Join(t.endpoint(), cr.tr.ID.String())
 
 	req, err := http.NewRequest("GET", uu.String(), nil)

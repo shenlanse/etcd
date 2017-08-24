@@ -38,6 +38,8 @@ var (
 	// InitialMmapSize is the initial size of the mmapped region. Setting this larger than
 	// the potential max db size can prevent writer from blocking reader.
 	// This only works for linux.
+	// 握草。10个G吗
+	// 值比较大的好处是，不需要频繁remmap
 	InitialMmapSize = int64(10 * 1024 * 1024 * 1024)
 
 	plog = capnslog.NewPackageLogger("github.com/coreos/etcd", "mvcc/backend")
@@ -72,6 +74,7 @@ type Snapshot interface {
 	Close() error
 }
 
+// 一共有四个bucket： key bucket 、 meta bucket 、lease bucket和auth bucket
 type backend struct {
 	// size and commits are used with atomic operations so they must be
 	// 64-bit aligned, otherwise 32-bit tests will crash
@@ -212,6 +215,7 @@ func (b *backend) Commits() int64 {
 	return atomic.LoadInt64(&b.commits)
 }
 
+// 碎片整理，仅仅是遍历老的db的所有key重新写到一个新的db中
 func (b *backend) Defrag() error {
 	err := b.defrag()
 	if err != nil {

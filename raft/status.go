@@ -20,10 +20,14 @@ import (
 	pb "github.com/coreos/etcd/raft/raftpb"
 )
 
+// hardState和softState分别是用来干啥的？
+// hardState会被持久化到wal中；softState则不会
+
 type Status struct {
 	ID uint64
-
+	// 三个属性：term vote and commit
 	pb.HardState
+	// leaderID and raftState
 	SoftState
 
 	Applied  uint64

@@ -22,11 +22,11 @@ package raftpb
 import (
 	"fmt"
 
-	proto "github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 
-	math "math"
+	"math"
 
-	io "io"
+	"io"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -255,7 +255,9 @@ func (*Message) Descriptor() ([]byte, []int) { return fileDescriptorRaft, []int{
 
 type HardState struct {
 	Term             uint64 `protobuf:"varint,1,opt,name=term" json:"term"`
+	// 给谁投过票
 	Vote             uint64 `protobuf:"varint,2,opt,name=vote" json:"vote"`
+	// 当前的commit id
 	Commit           uint64 `protobuf:"varint,3,opt,name=commit" json:"commit"`
 	XXX_unrecognized []byte `json:"-"`
 }

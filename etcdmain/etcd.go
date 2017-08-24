@@ -60,9 +60,13 @@ var (
 func startEtcdOrProxyV2() {
 	grpc.EnableTracing = false
 
+	// 初始化各种配置，设置好flagset
 	cfg := newConfig()
+
+	// infra0=http://10.0.1.10:2380,infra1=http://10.0.1.11:2380,infra2=http://10.0.1.12:2380
 	defaultInitialCluster := cfg.InitialCluster
 
+	// 环境变量、配置文件、命令行
 	err := cfg.parse(os.Args[1:])
 	if err != nil {
 		plog.Errorf("error verifying flags, %v. See 'etcd --help'.", err)
@@ -72,6 +76,7 @@ func startEtcdOrProxyV2() {
 		}
 		os.Exit(1)
 	}
+	// 设置日志级别、logFormater
 	setupLogging(cfg)
 
 	var stopped <-chan struct{}
@@ -82,6 +87,7 @@ func startEtcdOrProxyV2() {
 	plog.Infof("Go Version: %s\n", runtime.Version())
 	plog.Infof("Go OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 
+	//
 	GoMaxProcs := runtime.GOMAXPROCS(0)
 	plog.Infof("setting maximum number of CPUs to %d, total number of available CPUs is %d", GoMaxProcs, runtime.NumCPU())
 
@@ -92,11 +98,14 @@ func startEtcdOrProxyV2() {
 		plog.Warningf("no data-dir provided, using default data-dir ./%s", cfg.Dir)
 	}
 
+
+	// dirMember
 	which := identifyDataDirOrDie(cfg.Dir)
 	if which != dirEmpty {
 		plog.Noticef("the server is already initialized as %v before, starting as etcd %v...", which, which)
 		switch which {
 		case dirMember:
+			//
 			stopped, errc, err = startEtcd(&cfg.Config)
 		case dirProxy:
 			err = startProxy(cfg)
@@ -155,6 +164,7 @@ func startEtcdOrProxyV2() {
 		plog.Fatalf("%v", err)
 	}
 
+	// 捕获信号，优雅退出，如果是leader，那么主动让出leader身份，将leader转交给最活跃的follower，不需要经过timeout
 	osutil.HandleInterrupts()
 
 	if systemdutil.IsRunningSystemd() {
@@ -197,12 +207,21 @@ func startEtcd(cfg *embed.Config) (<-chan struct{}, <-chan error, error) {
 		grpc_prometheus.EnableHandlingTimeHistogram()
 	}
 
+	//
 	e, err := embed.StartEtcd(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// 捕获信号，优雅退出
+	// 主在退出之前，主动让出leader，选一个连接时间最长的follower作为candidate
+	// 不需要经过leader timeout，进行选主
 	osutil.RegisterInterruptHandler(e.Server.Stop)
-	<-e.Server.ReadyNotify() // wait for e.Server to join the cluster
+
+	// wait for e.Server to join the cluster
+	// ReadyNotify returns a channel that will be closed when the server
+	// is ready to serve client requests
+	<-e.Server.ReadyNotify()
 	return e.Server.StopNotify(), e.Err(), nil
 }
 

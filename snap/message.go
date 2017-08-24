@@ -30,7 +30,9 @@ import (
 //
 // User of Message should close the Message after sending it.
 type Message struct {
+	// raft message, 包含了v2 store snapshot
 	raftpb.Message
+	// v3 mvcc snapshot
 	ReadCloser io.ReadCloser
 	TotalSize  int64
 	closeC     chan bool

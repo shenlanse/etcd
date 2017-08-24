@@ -37,7 +37,7 @@ const (
 	StateFollower StateType = iota
 	StateCandidate
 	StateLeader
-	StatePreCandidate
+	StatePreCandidate // 两阶段选举
 	numStates
 )
 
@@ -59,11 +59,16 @@ const (
 const (
 	// campaignPreElection represents the first phase of a normal election when
 	// Config.PreVote is true.
+	// 两阶段选举，避免不断选主不断切换
 	campaignPreElection CampaignType = "CampaignPreElection"
 	// campaignElection represents a normal (time-based) election (the second phase
 	// of the election when Config.PreVote is true).
 	campaignElection CampaignType = "CampaignElection"
 	// campaignTransfer represents the type of leader transfer
+	// transfee收到了leader发过来的timeout，知道可以竞选主了
+	// 用户主动改变leader，不需要经过ElectionTimeout，并且leader是确认的
+	// 为什么不用CampaignElection呢？ 因为普通的CampaignElection，如果其他的follower一直有收到leader的心跳
+	// 那么是不会给新leader投票的。而CampaignTransfer则不同。
 	campaignTransfer CampaignType = "CampaignTransfer"
 )
 
@@ -154,11 +159,13 @@ type Config struct {
 
 	// CheckQuorum specifies if the leader should check quorum activity. Leader
 	// steps down when quorum is not active for an electionTimeout.
+	// leader主动降为follower
 	CheckQuorum bool
 
 	// PreVote enables the Pre-Vote algorithm described in raft thesis section
 	// 9.6. This prevents disruption when a node that has been partitioned away
 	// rejoins the cluster.
+	// 两阶段选举
 	PreVote bool
 
 	// ReadOnlyOption specifies how the read only request is processed.
@@ -206,12 +213,17 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// 首先必须要明白各个类型的message分别是干啥的
 type raft struct {
+	// id is the identity of the local raft
 	id uint64
 
+	//
 	Term uint64
+	// 给谁投了票
 	Vote uint64
 
+	// LinearizableRead
 	readStates []ReadState
 
 	// the log
@@ -223,14 +235,17 @@ type raft struct {
 
 	state StateType
 
+	// 如果竞选leader，收到的投票情况
 	votes map[uint64]bool
 
+	// mailBox，待处理的messages
 	msgs []pb.Message
 
 	// the leader id
 	lead uint64
 	// leadTransferee is id of the leader transfer target when its value is not zero.
 	// Follow the procedure defined in raft thesis 3.10.
+	// 主动切换leader到一个确定的节点
 	leadTransferee uint64
 	// New configuration is ignored if there exists unapplied configuration.
 	pendingConf bool
@@ -247,7 +262,11 @@ type raft struct {
 	// only leader keeps heartbeatElapsed.
 	heartbeatElapsed int
 
+	// leader被隔离后，主动检查，放弃leader身份，成为follower
+	// 免得一直误认为自己是leader
 	checkQuorum bool
+
+	// 两阶段选主，避免频繁换主
 	preVote     bool
 
 	heartbeatTimeout int
@@ -258,6 +277,7 @@ type raft struct {
 	randomizedElectionTimeout int
 
 	tick func()
+	// 看一下这个step什么时候调用
 	step stepFunc
 
 	logger Logger
@@ -302,6 +322,7 @@ func newRaft(c *Config) *raft {
 	if !isHardStateEqual(hs, emptyState) {
 		r.loadState(hs)
 	}
+	// = 0
 	if c.Applied > 0 {
 		raftlog.appliedTo(c.Applied)
 	}
@@ -376,7 +397,8 @@ func (r *raft) sendAppend(to uint64) {
 	term, errt := r.raftLog.term(pr.Next - 1)
 	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
 
-	if errt != nil || erre != nil { // send snapshot if we failed to get term or entries
+	// send snapshot if we failed to get term or entries
+	if errt != nil || erre != nil {
 		if !pr.RecentActive {
 			r.logger.Debugf("ignore sending snapshot to %x since it is not recently active", to)
 			return
@@ -475,6 +497,8 @@ func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
 // maybeCommit attempts to advance the commit index. Returns true if
 // the commit index changed (in which case the caller should call
 // r.bcastAppend).
+// 即取一个超过半数同意的最大的match index
+// 在收到MsgAppResp时，更新progress，并且调用此方法
 func (r *raft) maybeCommit() bool {
 	// TODO(bmizerany): optimize.. Currently naive
 	mis := make(uint64Slice, 0, len(r.prs))
@@ -500,6 +524,8 @@ func (r *raft) reset(term uint64) {
 	r.abortLeaderTransfer()
 
 	r.votes = make(map[uint64]bool)
+
+	// 初始化progress。注意没有设置match，只设置了next
 	for id := range r.prs {
 		r.prs[id] = &Progress{Next: r.raftLog.lastIndex() + 1, ins: newInflights(r.maxInflight)}
 		if id == r.id {
@@ -510,6 +536,7 @@ func (r *raft) reset(term uint64) {
 	r.readOnly = newReadOnly(r.readOnly.option)
 }
 
+// leader收到MsgProp，添加到他自己的raftlog中，并且更新自己的progress
 func (r *raft) appendEntry(es ...pb.Entry) {
 	li := r.raftLog.lastIndex()
 	for i := range es {
@@ -528,11 +555,15 @@ func (r *raft) tickElection() {
 
 	if r.promotable() && r.pastElectionTimeout() {
 		r.electionElapsed = 0
+		// 申请成为leader
 		r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
 	}
 }
 
 // tickHeartbeat is run by leaders to send a MsgBeat after r.heartbeatTimeout.
+// leader运行，两个作用：
+// （1）定期发送心跳给follower
+// （2）leader分区时，主动及时变为follower
 func (r *raft) tickHeartbeat() {
 	r.heartbeatElapsed++
 	r.electionElapsed++
@@ -540,6 +571,7 @@ func (r *raft) tickHeartbeat() {
 	if r.electionElapsed >= r.electionTimeout {
 		r.electionElapsed = 0
 		if r.checkQuorum {
+			// leader分区的情况下，主动及时变为follower
 			r.Step(pb.Message{From: r.id, Type: pb.MsgCheckQuorum})
 		}
 		// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
@@ -580,6 +612,8 @@ func (r *raft) becomeCandidate() {
 	r.logger.Infof("%x became candidate at term %d", r.id, r.Term)
 }
 
+// 注意与becomeCandidate的区别
+// 不增加r.Term，不更改r.Vote
 func (r *raft) becomePreCandidate() {
 	// TODO(xiangli) remove the panic when the raft implementation is stable
 	if r.state == StateLeader {
@@ -621,6 +655,7 @@ func (r *raft) becomeLeader() {
 	r.logger.Infof("%x became leader at term %d", r.id, r.Term)
 }
 
+//
 func (r *raft) campaign(t CampaignType) {
 	var term uint64
 	var voteMsg pb.MessageType
@@ -634,6 +669,7 @@ func (r *raft) campaign(t CampaignType) {
 		voteMsg = pb.MsgVote
 		term = r.Term
 	}
+	// 首先是自己给自己投了一票
 	if r.quorum() == r.poll(r.id, voteRespMsgType(voteMsg), true) {
 		// We won the election after voting for ourselves (which must mean that
 		// this is a single-node cluster). Advance to the next state.
@@ -659,6 +695,7 @@ func (r *raft) campaign(t CampaignType) {
 	}
 }
 
+// 收到投票的回复时
 func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int) {
 	if v {
 		r.logger.Infof("%x received %s from %x at term %d", r.id, t, id, r.Term)
@@ -679,8 +716,9 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int) {
 func (r *raft) Step(m pb.Message) error {
 	// Handle the message term, which may result in our stepping down to a follower.
 	switch {
+	// local message
 	case m.Term == 0:
-		// local message
+	// 不管是leader、follower还是candidate，只要收到比自己term大的非voteMessage，就会转变为follower
 	case m.Term > r.Term:
 		lead := m.From
 		if m.Type == pb.MsgVote || m.Type == pb.MsgPreVote {
@@ -734,6 +772,15 @@ func (r *raft) Step(m pb.Message) error {
 		return nil
 	}
 
+	/*
+
+	'MsgHup' is used for election. If a node is a follower or candidate, the
+	'tick' function in 'raft' struct is set as 'tickElection'. If a follower or
+	candidate has not received any heartbeat before the election timeout, it
+	passes 'MsgHup' to its Step method and becomes (or remains) a candidate to
+	start a new election.
+
+	*/
 	switch m.Type {
 	case pb.MsgHup:
 		if r.state != StateLeader {
@@ -756,6 +803,7 @@ func (r *raft) Step(m pb.Message) error {
 			r.logger.Debugf("%x ignoring MsgHup because already leader", r.id)
 		}
 
+	// 收到投票请求
 	case pb.MsgVote, pb.MsgPreVote:
 		// The m.Term > r.Term clause is for MsgPreVote. For MsgVote m.Term should
 		// always equal r.Term.
@@ -785,15 +833,21 @@ type stepFunc func(r *raft, m pb.Message)
 func stepLeader(r *raft, m pb.Message) {
 	// These message types do not require any progress for m.From.
 	switch m.Type {
+	// 向所有follower发送心跳
 	case pb.MsgBeat:
+		// 发送心跳时，会带上commit index，以及为了实现linerableRead而添加的readOnly context
+		// follower收到心跳时，会更新commit index
 		r.bcastHeartbeat()
 		return
+	// 如果leader r.electionElapsed >= r.electionTimeout，
+	// 那么主动检查Quorum，成为follower
 	case pb.MsgCheckQuorum:
 		if !r.checkQuorumActive() {
 			r.logger.Warningf("%x stepped down to follower since quorum is not active", r.id)
 			r.becomeFollower(r.Term, None)
 		}
 		return
+	// 可能是自己发过来的，也可能是follower转发过来的写请求
 	case pb.MsgProp:
 		if len(m.Entries) == 0 {
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
@@ -804,6 +858,7 @@ func stepLeader(r *raft, m pb.Message) {
 			// drop any new proposals.
 			return
 		}
+		// 如果正处在切换主的阶段，那么拒绝写请求
 		if r.leadTransferee != None {
 			r.logger.Debugf("%x [term %d] transfer leadership to %x is in progress; dropping proposal", r.id, r.Term, r.leadTransferee)
 			return
@@ -821,6 +876,8 @@ func stepLeader(r *raft, m pb.Message) {
 		r.appendEntry(m.Entries...)
 		r.bcastAppend()
 		return
+	// 实现LinearizableRead
+	// 读请求需要读到最新的已经commit的数据，不会读到老数据
 	case pb.MsgReadIndex:
 		if r.quorum() > 1 {
 			if r.raftLog.zeroTermOnErrCompacted(r.raftLog.term(r.raftLog.committed)) != r.Term {
@@ -833,6 +890,7 @@ func stepLeader(r *raft, m pb.Message) {
 			// This would allow multiple reads to piggyback on the same message.
 			switch r.readOnly.option {
 			case ReadOnlySafe:
+				//m.Entries[0].Data是一个ID
 				r.readOnly.addRequest(r.raftLog.committed, m)
 				r.bcastHeartbeatWithCtx(m.Entries[0].Data)
 			case ReadOnlyLeaseBased:
@@ -894,6 +952,8 @@ func stepLeader(r *raft, m pb.Message) {
 					r.sendAppend(m.From)
 				}
 				// Transfer leadership is in progress.
+				// 如果处于切换主的阶段，并且leadTransferee已经拿到了最新的日志，
+				// 那么当前leader可以发送MsgTimeoutNow给leadTransferee，告诉他可以竞选主了
 				if m.From == r.leadTransferee && pr.Match == r.raftLog.lastIndex() {
 					r.logger.Infof("%x sent MsgTimeoutNow to %x after received MsgAppResp", r.id, m.From)
 					r.sendTimeoutNow(m.From)
@@ -1019,6 +1079,7 @@ func stepCandidate(r *raft, m pb.Message) {
 				r.becomeLeader()
 				r.bcastAppend()
 			}
+		// 即收到了一半以上的拒绝投票
 		case len(r.votes) - gr:
 			r.becomeFollower(r.Term, None)
 		}
@@ -1029,6 +1090,7 @@ func stepCandidate(r *raft, m pb.Message) {
 
 func stepFollower(r *raft, m pb.Message) {
 	switch m.Type {
+	// 需要转发给leader
 	case pb.MsgProp:
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
@@ -1036,18 +1098,25 @@ func stepFollower(r *raft, m pb.Message) {
 		}
 		m.To = r.lead
 		r.send(m)
+	// 从leader那边收到的log entry
+	// 写到raftLog，回复leader
 	case pb.MsgApp:
 		r.electionElapsed = 0
 		r.lead = m.From
 		r.handleAppendEntries(m)
+	// leader发过来的心跳
+	// 更新raftLog commit
 	case pb.MsgHeartbeat:
 		r.electionElapsed = 0
 		r.lead = m.From
 		r.handleHeartbeat(m)
+	// 从leader收到的快照
+	// 更新raftLog
 	case pb.MsgSnap:
 		r.electionElapsed = 0
 		r.lead = m.From
 		r.handleSnapshot(m)
+	// 用户主动切换leader，需要转发给leader
 	case pb.MsgTransferLeader:
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping leader transfer msg", r.id, r.Term)
@@ -1055,6 +1124,7 @@ func stepFollower(r *raft, m pb.Message) {
 		}
 		m.To = r.lead
 		r.send(m)
+	// 告诉Transferee可以竞选主了
 	case pb.MsgTimeoutNow:
 		if r.promotable() {
 			r.logger.Infof("%x [term %d] received MsgTimeoutNow from %x and starts an election to get leadership.", r.id, r.Term, m.From)
@@ -1065,6 +1135,7 @@ func stepFollower(r *raft, m pb.Message) {
 		} else {
 			r.logger.Infof("%x received MsgTimeoutNow from %x but is not promotable", r.id, m.From)
 		}
+	// 转发给leader
 	case pb.MsgReadIndex:
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping index reading msg", r.id, r.Term)
@@ -1072,6 +1143,7 @@ func stepFollower(r *raft, m pb.Message) {
 		}
 		m.To = r.lead
 		r.send(m)
+	//
 	case pb.MsgReadIndexResp:
 		if len(m.Entries) != 1 {
 			r.logger.Errorf("%x invalid format of MsgReadIndexResp from %x, entries count: %d", r.id, m.From, len(m.Entries))
@@ -1081,6 +1153,7 @@ func stepFollower(r *raft, m pb.Message) {
 	}
 }
 
+// 收到了从leader发送过来的log entry
 func (r *raft) handleAppendEntries(m pb.Message) {
 	if m.Index < r.raftLog.committed {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
@@ -1096,11 +1169,13 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 	}
 }
 
+// candidate和follower收到了leader发来的心跳
 func (r *raft) handleHeartbeat(m pb.Message) {
 	r.raftLog.commitTo(m.Commit)
 	r.send(pb.Message{To: m.From, Type: pb.MsgHeartbeatResp, Context: m.Context})
 }
 
+// candidate和follower收到了leader发来的snapshot
 func (r *raft) handleSnapshot(m pb.Message) {
 	sindex, sterm := m.Snapshot.Metadata.Index, m.Snapshot.Metadata.Term
 	if r.restore(m.Snapshot) {
@@ -1150,6 +1225,7 @@ func (r *raft) promotable() bool {
 	return ok
 }
 
+//
 func (r *raft) addNode(id uint64) {
 	r.pendingConf = false
 	if _, ok := r.prs[id]; ok {
@@ -1234,6 +1310,7 @@ func (r *raft) checkQuorumActive() bool {
 	return act >= r.quorum()
 }
 
+// leader告诉Transferee可以竞选leader了
 func (r *raft) sendTimeoutNow(to uint64) {
 	r.send(pb.Message{To: to, Type: pb.MsgTimeoutNow})
 }

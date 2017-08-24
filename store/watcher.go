@@ -22,10 +22,10 @@ type Watcher interface {
 
 type watcher struct {
 	eventChan  chan *Event
-	stream     bool
-	recursive  bool
-	sinceIndex uint64
-	startIndex uint64
+	stream     bool   //
+	recursive  bool   //
+	sinceIndex uint64 //
+	startIndex uint64 //
 	hub        *watcherHub
 	removed    bool
 	remove     func()

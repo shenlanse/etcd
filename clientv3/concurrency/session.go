@@ -41,13 +41,17 @@ func NewSession(client *v3.Client, opts ...SessionOption) (*Session, error) {
 		opt(ops)
 	}
 
+	// 申请租约
 	resp, err := client.Grant(ops.ctx, int64(ops.ttl))
 	if err != nil {
 		return nil, err
 	}
 	id := v3.LeaseID(resp.ID)
 
+	// ctx.Done chan is closed when cancel func is called
 	ctx, cancel := context.WithCancel(ops.ctx)
+
+	// 续约
 	keepAlive, err := client.KeepAlive(ctx, id)
 	if err != nil || keepAlive == nil {
 		return nil, err

@@ -26,6 +26,8 @@ import (
 
 // SaveDBFrom saves snapshot of the database from the given reader. It
 // guarantees the save operation is atomic.
+// follower在snapshot http handler在收到leader发过来的快照时会将快照保存到本地，
+// 并且将这个message放到raft状态机中，apply的时候，会根据这个文件recover
 func (s *Snapshotter) SaveDBFrom(r io.Reader, id uint64) (int64, error) {
 	f, err := ioutil.TempFile(s.dir, "tmp")
 	if err != nil {
@@ -59,6 +61,7 @@ func (s *Snapshotter) SaveDBFrom(r io.Reader, id uint64) (int64, error) {
 
 // DBFilePath returns the file path for the snapshot of the database with
 // given id. If the snapshot does not exist, it returns error.
+// 找不到同名文件会返回错误
 func (s *Snapshotter) DBFilePath(id uint64) (string, error) {
 	fns, err := fileutil.ReadDir(s.dir)
 	if err != nil {

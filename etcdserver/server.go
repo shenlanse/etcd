@@ -242,6 +242,8 @@ type EtcdServer struct {
 // NewServer creates a new EtcdServer from the supplied configuration. The
 // configuration is considered static for the lifetime of the EtcdServer.
 func NewServer(cfg *ServerConfig) (srv *EtcdServer, err error) {
+	// store defines etcd's in-memory key/value store.
+	// v2 store
 	st := store.New(StoreClusterPrefix, StoreKeysPrefix)
 
 	var (
@@ -252,20 +254,29 @@ func NewServer(cfg *ServerConfig) (srv *EtcdServer, err error) {
 		cl *membership.RaftCluster
 	)
 
+	// /data/etcd/
 	if terr := fileutil.TouchDirAll(cfg.DataDir); terr != nil {
 		return nil, fmt.Errorf("cannot access data directory: %v", terr)
 	}
 
+	// 说明不是一个新的集群，需要根据wal recover
+	// /data/etcd/member/wal/
 	haveWAL := wal.Exist(cfg.WALDir())
 
+	// /data/etcd/member/snap/
 	if err = fileutil.TouchDirAll(cfg.SnapDir()); err != nil {
 		plog.Fatalf("create snapshot directory error: %v", err)
 	}
+
+	// (1)leader会发送给followersnap
+	// (2)更改次数超过阈值，触发创建快照
 	ss := snap.New(cfg.SnapDir())
 
+	// /data/etcd/member/snap/db
 	bepath := path.Join(cfg.SnapDir(), databaseFilename)
 	beExist := fileutil.Exist(bepath)
 
+	//
 	var be backend.Backend
 	beOpened := make(chan struct{})
 	go func() {
@@ -322,6 +333,7 @@ func NewServer(cfg *ServerConfig) (srv *EtcdServer, err error) {
 		cl.SetBackend(be)
 		cfg.Print()
 		id, n, s, w = startNode(cfg, cl, nil)
+	// 新集群
 	case !haveWAL && cfg.NewCluster:
 		if err = cfg.VerifyBootstrap(); err != nil {
 			return nil, err
@@ -356,6 +368,7 @@ func NewServer(cfg *ServerConfig) (srv *EtcdServer, err error) {
 		cl.SetBackend(be)
 		cfg.PrintWithInitial()
 		id, n, s, w = startNode(cfg, cl, cl.MemberIDs())
+	// 老集群，重启恢复
 	case haveWAL:
 		if err = fileutil.IsDirWriteable(cfg.MemberDir()); err != nil {
 			return nil, fmt.Errorf("cannot write to member directory: %v", err)
@@ -463,6 +476,8 @@ func NewServer(cfg *ServerConfig) (srv *EtcdServer, err error) {
 		func(index uint64) <-chan struct{} {
 			return srv.applyWait.Wait(index)
 		})
+
+	// 自动压缩，保留历史数据h个小时
 	if h := cfg.AutoCompactionRetention; h != 0 {
 		srv.compactor = compactor.NewPeriodic(h, srv.kv, srv)
 		srv.compactor.Run()
@@ -637,10 +652,15 @@ func (s *EtcdServer) run() {
 				}
 				setSyncC(nil)
 			} else {
-				setSyncC(s.SyncTicker)
+
+				if s.lessor != nil {
+					s.lessor.Promote(s.Cfg.electionTimeout())
+				}
+
 				if s.compactor != nil {
 					s.compactor.Resume()
 				}
+				setSyncC(s.SyncTicker)
 			}
 
 			// TODO: remove the nil checking
@@ -745,6 +765,7 @@ func (s *EtcdServer) run() {
 }
 
 func (s *EtcdServer) applyAll(ep *etcdProgress, apply *apply) {
+	// 这个只有follower才会执行，因为主不会有这种message的
 	s.applySnapshot(ep, apply)
 	st := time.Now()
 	s.applyEntries(ep, apply)
@@ -783,12 +804,15 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, apply *apply) {
 		plog.Panicf("snapshot index [%d] should > appliedi[%d] + 1",
 			apply.snapshot.Metadata.Index, ep.appliedi)
 	}
-
+	// /data/etcd/member/snap/0x16(index).snap.db
+	// 这个文件是follower的raft http接收到快照时，存储到本地的
+	// 名字和他原始的mvcc 文件名不同，在apply的时候会rename
 	snapfn, err := s.r.storage.DBFilePath(apply.snapshot.Metadata.Index)
 	if err != nil {
 		plog.Panicf("get database snapshot file path error: %v", err)
 	}
 
+	// /data/etcd/member/snap/db
 	fn := path.Join(s.Cfg.SnapDir(), databaseFilename)
 	if err := os.Rename(snapfn, fn); err != nil {
 		plog.Panicf("rename snapshot file error: %v", err)
@@ -805,7 +829,6 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, apply *apply) {
 	}
 
 	plog.Info("restoring mvcc store...")
-
 	if err := s.kv.Restore(newbe); err != nil {
 		plog.Panicf("restore KV error: %v", err)
 	}
@@ -1285,6 +1308,7 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 		}
 		// promote lessor when the local member is leader and finished
 		// applying all entries from the last term.
+		// 当member当选为leader时，becomeLeader，会append一个空的entry
 		if s.isLeader() {
 			s.lessor.Promote(s.Cfg.electionTimeout())
 		}

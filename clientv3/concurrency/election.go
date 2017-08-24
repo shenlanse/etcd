@@ -27,7 +27,10 @@ var (
 	ErrElectionNotLeader = errors.New("election: not leader")
 	ErrElectionNoLeader  = errors.New("election: no leader")
 )
-
+// 每个竞选者，都会创建自己的lease和对应的key
+// prefix/name-of-candidate， value是竞选者自己的名字
+// 每个候选者不管有没有竞选上，都会定期续约
+//
 type Election struct {
 	session *Session
 
@@ -39,6 +42,8 @@ type Election struct {
 }
 
 // NewElection returns a new election on a given key prefix.
+// 比如执行'etcdctl elect President llq',那么keyPrefix=President
+// Campaign的第二个参数是llq
 func NewElection(s *Session, pfx string) *Election {
 	return &Election{session: s, keyPrefix: pfx + "/"}
 }
@@ -50,17 +55,27 @@ func (e *Election) Campaign(ctx context.Context, val string) error {
 	client := e.session.Client()
 
 	k := fmt.Sprintf("%s%x", e.keyPrefix, s.Lease())
+
+	// 可以看一下服务端的实现,createRevision=0 表示没有找到对应的key
 	txn := client.Txn(ctx).If(v3.Compare(v3.CreateRevision(k), "=", 0))
+
 	txn = txn.Then(v3.OpPut(k, val, v3.WithLease(s.Lease())))
+
 	txn = txn.Else(v3.OpGet(k))
+
 	resp, err := txn.Commit()
+
 	if err != nil {
 		return err
 	}
 	e.leaderKey, e.leaderRev, e.leaderSession = k, resp.Header.Revision, s
+
+	// succeeded is set to true if the compare evaluated to true
+	// 这个说明该竞选者之前已经竞选过leader，并且还没有过期
 	if !resp.Succeeded {
 		kv := resp.Responses[0].GetResponseRange().Kvs[0]
 		e.leaderRev = kv.CreateRevision
+		// 竞选者的名字，竟然变了。正常情况下不会出现的。
 		if string(kv.Value) != val {
 			if err = e.Proclaim(ctx, val); err != nil {
 				e.Resign(ctx)
@@ -69,6 +84,10 @@ func (e *Election) Campaign(ctx context.Context, val string) error {
 		}
 	}
 
+	// 创建了对应的lease和key-value之后，就会判断一下是否有比他创建的还早的candidate
+	// 如果没有,那么成功成为leader
+	// 如果还有比他早的,那么监控这个最新创建的比他早的key
+	// 监控到删除之后,会再次循环执行这个过程
 	err = waitDeletes(ctx, client, e.keyPrefix, e.leaderRev-1)
 	if err != nil {
 		// clean up in case of context cancel
@@ -80,7 +99,8 @@ func (e *Election) Campaign(ctx context.Context, val string) error {
 		}
 		return err
 	}
-
+	// 竞选成功
+	// 那么竞选成功之后会干啥呢?如何判断是否丢主.  应该是没有做什么处理的
 	return nil
 }
 

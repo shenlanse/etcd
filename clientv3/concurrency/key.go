@@ -53,10 +53,12 @@ func waitDeletes(ctx context.Context, client *v3.Client, pfx string, maxCreateRe
 		if err != nil {
 			return err
 		}
+		// 没有创建的比他还早的候选者
 		if len(resp.Kvs) == 0 {
 			return nil
 		}
 		lastKey := string(resp.Kvs[0].Key)
+		// 监控到一个比他还早的创建者，那么就watch这个key，监控到delete就会进行下一次循环
 		if err = waitDelete(ctx, client, lastKey, resp.Header.Revision); err != nil {
 			return err
 		}

@@ -142,6 +142,7 @@ func newDiscovery(durl, dproxyurl string, id types.ID) (*discovery, error) {
 	}
 	dc := client.NewKeysAPIWithPrefix(c, "")
 	return &discovery{
+		// /_etcd/registry/UUID/
 		cluster: token,
 		c:       dc,
 		id:      id,
@@ -195,6 +196,8 @@ func (d *discovery) getCluster() (string, error) {
 
 func (d *discovery) createSelf(contents string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), client.DefaultRequestTimeout)
+	// key= /_etcd/registry/UUID/member_id
+	// value="${member_name}=${member_peer_url_1}&${member_name}=${member_peer_url_2}"
 	resp, err := d.c.Create(ctx, d.selfKey(), contents)
 	cancel()
 	if err != nil {
@@ -211,6 +214,7 @@ func (d *discovery) createSelf(contents string) error {
 }
 
 func (d *discovery) checkCluster() ([]*client.Node, int, uint64, error) {
+	// /_etcd/registry/${UUID}/_config
 	configKey := path.Join("/", d.cluster, "_config")
 	ctx, cancel := context.WithTimeout(context.Background(), client.DefaultRequestTimeout)
 	// find cluster size
@@ -333,6 +337,7 @@ func (d *discovery) waitNodes(nodes []*client.Node, size int, index uint64) ([]*
 	return all, nil
 }
 
+// /_etcd/registry/UUID/member_id
 func (d *discovery) selfKey() string {
 	return path.Join("/", d.cluster, d.id.String())
 }

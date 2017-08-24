@@ -30,7 +30,9 @@ import (
 )
 
 var (
+	// renew
 	LeasePrefix         = "/leases"
+	// 查询，返回lease相关的信息
 	LeaseInternalPrefix = "/leases/internal"
 	applyTimeout        = time.Second
 	ErrLeaseHTTPTimeout = errors.New("waiting for node to catch up its applied index has timed out")
@@ -43,6 +45,7 @@ func NewHandler(l lease.Lessor, waitch func() <-chan struct{}) http.Handler {
 
 type leaseHandler struct {
 	l      lease.Lessor
+	// 不太理解加上这个chan有什么意义，为什么要等待commit entry apply
 	waitch func() <-chan struct{}
 }
 

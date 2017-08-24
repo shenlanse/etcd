@@ -40,6 +40,7 @@ type watchable interface {
 	rev() int64
 }
 
+// 其实最主要的就是这两个watcher group
 type watchableStore struct {
 	mu sync.Mutex
 
@@ -59,6 +60,9 @@ type watchableStore struct {
 	stopc chan struct{}
 	wg    sync.WaitGroup
 }
+
+// to make sure that watchableStore implements ConsistentWatchableKV interface
+var _ = ConsistentWatchableKV(watchableStore{})
 
 // cancelFunc updates unsynced and synced maps when running
 // cancel operations.
@@ -90,6 +94,7 @@ func (s *watchableStore) Put(key, value []byte, lease lease.LeaseID) (rev int64)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// rev是当前最大的版本号
 	rev = s.store.Put(key, value, lease)
 	changes := s.store.getChanges()
 	if len(changes) != 1 {
@@ -480,6 +485,7 @@ func (s *watchableStore) notify(rev int64, evs []mvccpb.Event) {
 			plog.Panicf("unexpected multiple revisions in notification")
 		}
 
+		// chan满了，不可以阻塞
 		if w.send(WatchResponse{WatchID: w.id, Events: eb.evs, Revision: rev}) {
 			pendingEventsGauge.Add(float64(len(eb.evs)))
 		} else {

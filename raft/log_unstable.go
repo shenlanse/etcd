@@ -22,9 +22,11 @@ import pb "github.com/coreos/etcd/raft/raftpb"
 // might need to truncate the log before persisting unstable.entries.
 type unstable struct {
 	// the incoming unstable snapshot, if any.
+	// follower收到leader传过来的snap
 	snapshot *pb.Snapshot
 	// all entries that have not yet been written to storage.
 	entries []pb.Entry
+	// 第一个entry的index
 	offset  uint64
 
 	logger Logger
@@ -74,6 +76,8 @@ func (u *unstable) maybeTerm(i uint64) (uint64, bool) {
 	return u.entries[i-u.offset].Term, true
 }
 
+// 即把i index之前的entry全部删除掉
+// 在把unstable的entries写到wal中，并且append到MemoryStorage中之后，执行这个函数
 func (u *unstable) stableTo(i, t uint64) {
 	gt, ok := u.maybeTerm(i)
 	if !ok {
@@ -88,12 +92,14 @@ func (u *unstable) stableTo(i, t uint64) {
 	}
 }
 
+// 在将unstable的snap写到wal中，保存到本地文件，并且Apply到MemoryStorage中之后，执行这个函数
 func (u *unstable) stableSnapTo(i uint64) {
 	if u.snapshot != nil && u.snapshot.Metadata.Index == i {
 		u.snapshot = nil
 	}
 }
 
+// follower收到了leader发过来的快照时，先保存到unstable中
 func (u *unstable) restore(s pb.Snapshot) {
 	u.offset = s.Metadata.Index + 1
 	u.entries = nil
@@ -127,7 +133,7 @@ func (u *unstable) slice(lo uint64, hi uint64) []pb.Entry {
 	return u.entries[lo-u.offset : hi-u.offset]
 }
 
-// u.offset <= lo <= hi <= u.offset+len(u.offset)
+// u.offset <= lo <= hi <= u.offset+len(u.entries)
 func (u *unstable) mustCheckOutOfBounds(lo, hi uint64) {
 	if lo > hi {
 		u.logger.Panicf("invalid unstable.slice %d > %d", lo, hi)

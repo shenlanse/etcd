@@ -202,6 +202,7 @@ func (n *node) Add(child *node) *etcdErr.Error {
 }
 
 // Remove function remove the node.
+// 递归删除
 func (n *node) Remove(dir, recursive bool, callback func(path string)) *etcdErr.Error {
 	if !n.IsDir() { // key-value pair
 		_, name := path.Split(n.Path)
@@ -254,6 +255,7 @@ func (n *node) Remove(dir, recursive bool, callback func(path string)) *etcdErr.
 	return nil
 }
 
+// 返回node的外部表示
 func (n *node) Repr(recursive, sorted bool, clock clockwork.Clock) *NodeExtern {
 	if n.IsDir() {
 		node := &NodeExtern{

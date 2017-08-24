@@ -153,6 +153,7 @@ func NewLessor(b backend.Backend, minLeaseTTL int64) Lessor {
 	return newLessor(b, minLeaseTTL)
 }
 
+// 只有leader会运行协程，过滤出过期的lease，然后，交给raft状态机，revoke
 func newLessor(b backend.Backend, minLeaseTTL int64) *lessor {
 	l := &lessor{
 		leaseMap:    make(map[LeaseID]*Lease),
@@ -164,6 +165,8 @@ func newLessor(b backend.Backend, minLeaseTTL int64) *lessor {
 		stopC:    make(chan struct{}),
 		doneC:    make(chan struct{}),
 	}
+
+	// 初始化，遍历bucket中的k-v，恢复出lessor
 	l.initAndRecover()
 
 	go l.runLoop()
@@ -174,7 +177,7 @@ func newLessor(b backend.Backend, minLeaseTTL int64) *lessor {
 // isPrimary indicates if this lessor is the primary lessor. The primary
 // lessor manages lease expiration and renew.
 //
-// in etcd, raft leader is the primary. Thus there might be two primary
+// In etcd, raft leader is the primary. Thus there might be two primary
 // leaders at the same time (raft allows concurrent leader but with different term)
 // for at most a leader election timeout.
 // The old primary leader cannot affect the correctness since its proposal has a
@@ -328,6 +331,8 @@ func (le *lessor) Lookup(id LeaseID) *Lease {
 	return le.leaseMap[id]
 }
 
+// 升级
+// 当member becomeLeader时，会发一个data为空的entry，raft状态机apply的时候会进行特殊处理，调用这个Promote
 func (le *lessor) Promote(extend time.Duration) {
 	le.mu.Lock()
 	defer le.mu.Unlock()
@@ -340,6 +345,7 @@ func (le *lessor) Promote(extend time.Duration) {
 	}
 }
 
+// 降级
 func (le *lessor) Demote() {
 	le.mu.Lock()
 	defer le.mu.Unlock()
@@ -422,6 +428,7 @@ func (le *lessor) Stop() {
 func (le *lessor) runLoop() {
 	defer close(le.doneC)
 
+	// 每500ms检查一次
 	for {
 		var ls []*Lease
 

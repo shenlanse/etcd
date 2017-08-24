@@ -64,7 +64,9 @@ func (sctx *serveCtx) serve(s *etcdserver.EtcdServer, tlscfg *tls.Config, handle
 
 	m := cmux.New(sctx.l)
 
+	// 同一个端口同时提供http1和http2服务
 	if sctx.insecure {
+		// v3 grpc handler
 		gs := v3rpc.Server(s, nil)
 		grpcl := m.Match(cmux.HTTP2())
 		go func() { errc <- gs.Serve(grpcl) }()
@@ -72,11 +74,14 @@ func (sctx *serveCtx) serve(s *etcdserver.EtcdServer, tlscfg *tls.Config, handle
 		opts := []grpc.DialOption{
 			grpc.WithInsecure(),
 		}
+		// v3的http接口
 		gwmux, err := sctx.registerGateway(opts)
 		if err != nil {
 			return err
 		}
 
+
+		// v2 http handler
 		httpmux := sctx.createMux(gwmux, handler)
 
 		srvhttp := &http.Server{

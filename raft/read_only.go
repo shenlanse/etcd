@@ -22,7 +22,9 @@ import pb "github.com/coreos/etcd/raft/raftpb"
 // state is what it requests through RequestCtx, eg. given a unique id as
 // RequestCtx
 type ReadState struct {
+	// Linerableread请求发过来时的commitId
 	Index      uint64
+	// 请求的ID
 	RequestCtx []byte
 }
 
@@ -40,13 +42,14 @@ type readOnly struct {
 
 func newReadOnly(option ReadOnlyOption) *readOnly {
 	return &readOnly{
+		// 默认值为ReadOnlySafe
 		option:           option,
 		pendingReadIndex: make(map[string]*readIndexStatus),
 	}
 }
 
-// addRequest adds a read only reuqest into readonly struct.
-// `index` is the commit index of the raft state machine when it received
+// addRequest adds a read only request into readonly struct.
+// `index` is **the commit index** of the raft state machine when it received
 // the read only request.
 // `m` is the original read only request message from the local or remote node.
 func (ro *readOnly) addRequest(index uint64, m pb.Message) {
@@ -75,6 +78,7 @@ func (ro *readOnly) recvAck(m pb.Message) int {
 // advance advances the read only request queue kept by the readonly struct.
 // It dequeues the requests until it finds the read only request that has
 // the same context as the given `m`.
+// 超过一半以上的响应时，会将确认的pendingReadIndex放到raft.readStates
 func (ro *readOnly) advance(m pb.Message) []*readIndexStatus {
 	var (
 		i     int

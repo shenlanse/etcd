@@ -33,7 +33,9 @@ var prstmap = [...]string{
 func (st ProgressStateType) String() string { return prstmap[uint64(st)] }
 
 // Progress represents a follower’s progress in the view of the leader. Leader maintains
-// progresses of all followers, and sends entries to the follower based on its progress.
+// progresses of all followers,
+//
+// and sends entries to the follower based on its progress.
 type Progress struct {
 	Match, Next uint64
 	// State defines how the leader should interact with the follower.
@@ -60,6 +62,7 @@ type Progress struct {
 
 	// RecentActive is true if the progress is recently active. Receiving any messages
 	// from the corresponding follower indicates the progress is active.
+	//
 	// RecentActive can be reset to false after an election timeout.
 	RecentActive bool
 
@@ -85,6 +88,8 @@ func (pr *Progress) resetState(state ProgressStateType) {
 	pr.ins.reset()
 }
 
+// 发送快照之后，收到了成功的resp，就会转变成Probe状态
+// 或者说本来是Replicate状态，但是收到了reject，那么就需要转换成Probe状态
 func (pr *Progress) becomeProbe() {
 	// If the original state is ProgressStateSnapshot, progress knows that
 	// the pending snapshot has been sent to this peer successfully, then
@@ -99,11 +104,14 @@ func (pr *Progress) becomeProbe() {
 	}
 }
 
+// 之前是Probe状态，后来收到了follower的成功的回复
 func (pr *Progress) becomeReplicate() {
 	pr.resetState(ProgressStateReplicate)
 	pr.Next = pr.Match + 1
 }
 
+// 如果leader本地raftLog中已经找不到index为i的entry的历史了，那么这个时候就需要发送snapshot给follower
+// send snapshot if we failed to get term or entries
 func (pr *Progress) becomeSnapshot(snapshoti uint64) {
 	pr.resetState(ProgressStateSnapshot)
 	pr.PendingSnapshot = snapshoti
@@ -111,6 +119,7 @@ func (pr *Progress) becomeSnapshot(snapshoti uint64) {
 
 // maybeUpdate returns false if the given n index comes from an outdated message.
 // Otherwise it updates the progress and returns true.
+// leader发送给followermessage，然后收到了来自follower的回复时，n为index
 func (pr *Progress) maybeUpdate(n uint64) bool {
 	var updated bool
 	if pr.Match < n {
@@ -124,10 +133,14 @@ func (pr *Progress) maybeUpdate(n uint64) bool {
 	return updated
 }
 
+// optimistically increase the next when in ProgressStateReplicate
+// 即当处于Replicate状态的时候，如果要发送给follower一个包含N个entry的message，那么leader直接
+// 更新pr.next
 func (pr *Progress) optimisticUpdate(n uint64) { pr.Next = n + 1 }
 
 // maybeDecrTo returns false if the given to index comes from an out of order message.
 // Otherwise it decreases the progress next index to min(rejected, last) and returns true.
+// 当收到follower的reject消息的时候
 func (pr *Progress) maybeDecrTo(rejected, last uint64) bool {
 	if pr.State == ProgressStateReplicate {
 		// the rejection must be stale if the progress has matched and "rejected"
@@ -136,6 +149,7 @@ func (pr *Progress) maybeDecrTo(rejected, last uint64) bool {
 			return false
 		}
 		// directly decrease next to match + 1
+		// 还是不明白为什么不设置为pr.last+1?
 		pr.Next = pr.Match + 1
 		return true
 	}
@@ -152,7 +166,10 @@ func (pr *Progress) maybeDecrTo(rejected, last uint64) bool {
 	return true
 }
 
+// probe状态下，发送了一条message就需要pause
 func (pr *Progress) pause()  { pr.Paused = true }
+
+// 收到心跳的时候会resume；还有其他情况
 func (pr *Progress) resume() { pr.Paused = false }
 
 // IsPaused returns whether sending log entries to this node has been
@@ -172,6 +189,7 @@ func (pr *Progress) IsPaused() bool {
 	}
 }
 
+// leader发送给follower快照，收到了reject message
 func (pr *Progress) snapshotFailure() { pr.PendingSnapshot = 0 }
 
 // needSnapshotAbort returns true if snapshot progress's Match
@@ -184,6 +202,15 @@ func (pr *Progress) String() string {
 	return fmt.Sprintf("next = %d, match = %d, state = %s, waiting = %v, pendingSnapshot = %d", pr.Next, pr.Match, pr.State, pr.IsPaused(), pr.PendingSnapshot)
 }
 
+
+
+// When inflights is full, no more message should be sent.
+// When a leader sends out a message, the index of the last
+// entry should be added to inflights. The index MUST be added
+// into inflights in order.
+// When a leader receives a reply, the previous inflights should
+// be freed by calling inflights.freeTo with the index of the last
+// received entry.
 type inflights struct {
 	// the starting index in the buffer
 	start int
@@ -205,6 +232,8 @@ func newInflights(size int) *inflights {
 }
 
 // add adds an inflight into inflights
+// When a leader sends out a message, the index of the last
+// entry should be added to inflights.
 func (in *inflights) add(inflight uint64) {
 	if in.full() {
 		panic("cannot add into a full inflights")

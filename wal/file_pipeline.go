@@ -22,6 +22,7 @@ import (
 	"github.com/coreos/etcd/pkg/fileutil"
 )
 
+// 预先创建指定大小的文件，以备后用
 // filePipeline pipelines allocating disk space
 type filePipeline struct {
 	// dir to put files

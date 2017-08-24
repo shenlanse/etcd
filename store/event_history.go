@@ -23,6 +23,7 @@ import (
 	etcdErr "github.com/coreos/etcd/error"
 )
 
+// 环形缓冲区
 type EventHistory struct {
 	Queue      eventQueue
 	StartIndex uint64
@@ -30,6 +31,7 @@ type EventHistory struct {
 	rwl        sync.RWMutex
 }
 
+// v2版本，默认值为1000
 func newEventHistory(capacity int) *EventHistory {
 	return &EventHistory{
 		Queue: eventQueue{

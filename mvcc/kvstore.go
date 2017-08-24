@@ -41,6 +41,7 @@ var (
 	markBytePosition       = markedRevBytesLen - 1
 	markTombstone     byte = 't'
 
+	// 理解meta bucket中，这三个key的作用
 	consistentIndexKeyName  = []byte("consistent_index")
 	scheduledCompactKeyName = []byte("scheduledCompactRev")
 	finishedCompactKeyName  = []byte("finishedCompactRev")
@@ -63,14 +64,19 @@ type ConsistentIndexGetter interface {
 type store struct {
 	mu sync.Mutex // guards the following
 
+	//
 	ig ConsistentIndexGetter
 
 	b       backend.Backend
+	// treeIndex，B树，存放key到revision的映射
 	kvindex index
 
+	//
 	le lease.Lessor
 
+	//
 	currentRev revision
+
 	// the main revision of the last compaction
 	compactMainRev int64
 
@@ -113,11 +119,13 @@ func NewStore(b backend.Backend, le lease.Lessor, ig ConsistentIndexGetter) *sto
 
 	tx := s.b.BatchTx()
 	tx.Lock()
+	// key bucket
 	tx.UnsafeCreateBucket(keyBucketName)
+	// meta bucket
 	tx.UnsafeCreateBucket(metaBucketName)
 	tx.Unlock()
 	s.b.ForceCommit()
-
+	// 遍历backend，构建内存中的tree index
 	if err := s.restore(); err != nil {
 		// TODO: return the error instead of panic here?
 		panic("failed to recover store from backend")
@@ -176,6 +184,7 @@ func (s *store) DeleteRange(key, end []byte) (n, rev int64) {
 	return n, int64(s.currentRev.main)
 }
 
+// 调用了batchTx的Lock，因此定时commit的操作无法获得锁自动commit
 func (s *store) TxnBegin() int64 {
 	s.mu.Lock()
 	s.currentRev.sub = 0
@@ -211,6 +220,7 @@ func (s *store) txnEnd(txnID int64) error {
 	}
 	s.txnModify = false
 
+	// it will commit if exceed maxBatchSize
 	s.tx.Unlock()
 	if s.currentRev.sub != 0 {
 		s.currentRev.main += 1
@@ -275,6 +285,7 @@ func (s *store) compactBarrier(ctx context.Context, ch chan struct{}) {
 	close(ch)
 }
 
+// 先压缩内存中的tree index，然后开始一个调度任务，将k-v从backend彻底删除
 func (s *store) Compact(rev int64) (<-chan struct{}, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -302,6 +313,7 @@ func (s *store) Compact(rev int64) (<-chan struct{}, error) {
 	// ensure that desired compaction is persisted
 	s.b.ForceCommit()
 
+	// 先compact内存中的treeIndex
 	keep := s.kvindex.Compact(rev)
 	ch := make(chan struct{})
 	var j = func(ctx context.Context) {
@@ -493,6 +505,7 @@ func (a *store) Equal(b *store) bool {
 // range is a keyword in Go, add Keys suffix.
 func (s *store) rangeKeys(key, end []byte, limit, rangeRev int64, countOnly bool) (kvs []mvccpb.KeyValue, count int, curRev int64, err error) {
 	curRev = int64(s.currentRev.main)
+	// 一个事务中有读有写，允许后面的读能够读到前面的写
 	if s.currentRev.sub > 0 {
 		curRev += 1
 	}
@@ -538,6 +551,7 @@ func (s *store) rangeKeys(key, end []byte, limit, rangeRev int64, countOnly bool
 	return kvs, len(revpairs), curRev, nil
 }
 
+// 写入backend，然后添加到tree index
 func (s *store) put(key, value []byte, leaseID lease.LeaseID) {
 	s.txnModify = true
 

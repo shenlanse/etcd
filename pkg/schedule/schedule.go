@@ -144,7 +144,9 @@ func (f *fifo) run() {
 		f.mu.Unlock()
 		if todo == nil {
 			select {
+			//
 			case <-f.resume:
+			// 调用了context cancel
 			case <-f.ctx.Done():
 				f.mu.Lock()
 				pendings := f.pendings

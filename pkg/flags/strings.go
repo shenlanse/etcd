@@ -18,8 +18,8 @@ import "errors"
 
 // NewStringsFlag creates a new string flag for which any one of the given
 // strings is a valid value, and any other value is an error.
-func NewStringsFlag(valids ...string) *StringsFlag {
-	return &StringsFlag{Values: valids}
+func NewStringsFlag(defaultVal string, valids ...string) *StringsFlag {
+	return &StringsFlag{Values: valids,val:defaultVal}
 }
 
 // StringsFlag implements the flag.Value interface.

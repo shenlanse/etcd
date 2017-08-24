@@ -68,15 +68,19 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	e = &Etcd{cfg: *inCfg}
 	cfg := &e.cfg
 	defer func() {
-		if e != nil && err != nil {
+		if err != nil {
 			e.Close()
 			e = nil
 		}
 	}()
 
+	// 设置了ConnReadTimeout和ConnWriteTimeout 5s
 	if e.Peers, err = startPeerListeners(cfg); err != nil {
 		return
 	}
+
+	// setKeepalive 30s
+	// client handler： (1) v3 grpc server; (2) v3 grpc-gateway http server; (3) v2 http server
 	if e.sctxs, err = startClientListeners(cfg); err != nil {
 		return
 	}
@@ -90,6 +94,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	)
 
 	if !isMemberInitialized(cfg) {
+		// initial peer URLsMap and cluster token for bootstrap or discovery
 		urlsmap, token, err = cfg.PeerURLsMapAndToken("etcd")
 		if err != nil {
 			return e, fmt.Errorf("error setting up initial cluster: %v", err)
@@ -120,6 +125,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		ClientCertAuthEnabled:   cfg.ClientTLSInfo.ClientCertAuth,
 	}
 
+	//
 	if e.Server, err = etcdserver.NewServer(srvcfg); err != nil {
 		return
 	}
@@ -127,7 +133,10 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	// buffer channel so goroutines on closed connections won't wait forever
 	e.errc = make(chan error, len(e.Peers)+len(e.Clients)+2*len(e.sctxs))
 
+	//
 	e.Server.Start()
+
+	//
 	if err = e.serve(); err != nil {
 		return
 	}
@@ -311,6 +320,7 @@ func (e *Etcd) serve() (err error) {
 	}
 
 	// Start the peer server in a goroutine
+	// 有三种handler：raft handler; peer member handler; lease handler
 	ph := v2http.NewPeerHandler(e.Server)
 	for _, l := range e.Peers {
 		go func(l net.Listener) {
@@ -319,6 +329,7 @@ func (e *Etcd) serve() (err error) {
 	}
 
 	// Start a client server goroutine for each listen address
+	// v2 http handler
 	ch := http.Handler(&cors.CORSHandler{
 		Handler: v2http.NewClientHandler(e.Server, e.Server.Cfg.ReqTimeout()),
 		Info:    e.cfg.CorsInfo,

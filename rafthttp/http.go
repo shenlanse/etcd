@@ -58,6 +58,8 @@ type writerToResponse interface {
 	WriteTo(w http.ResponseWriter)
 }
 
+// PATH: /raft
+// 只接受POST Method
 type pipelineHandler struct {
 	tr  Transporter
 	r   Raft
@@ -91,6 +93,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 为什么是err!=nil???
 	if from, err := types.IDFromString(r.Header.Get("X-Server-From")); err != nil {
 		if urls := r.Header.Get("X-PeerURLs"); urls != "" {
 			h.tr.AddRemote(from, strings.Split(urls, ","))
@@ -118,6 +121,7 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	receivedBytes.WithLabelValues(types.ID(m.From).String()).Add(float64(len(b)))
 
+	// 交给raft状态机来处理
 	if err := h.r.Process(context.TODO(), m); err != nil {
 		switch v := err.(type) {
 		case writerToResponse:
@@ -137,6 +141,11 @@ func (h *pipelineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+
+// PATH: /raft/snapshot
+// METHOD: POST
+// 1. 保存到本地文件中index.snap.db
+// 2. 交给raft状态机处理
 type snapshotHandler struct {
 	tr          Transporter
 	r           Raft
@@ -202,6 +211,7 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	plog.Infof("receiving database snapshot [index:%d, from %s] ...", m.Snapshot.Metadata.Index, types.ID(m.From))
 	// save incoming database snapshot.
+	// 上面已经将v2的snapshot从body中读出来了，剩下的是v3的mvcc file
 	n, err := h.snapshotter.SaveDBFrom(r.Body, m.Snapshot.Metadata.Index)
 	if err != nil {
 		msg := fmt.Sprintf("failed to save KV snapshot (%v)", err)
@@ -230,11 +240,14 @@ func (h *snapshotHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// PATH: /raft/stream
+// METHOD: GET
+//
 type streamHandler struct {
 	tr         *Transport
 	peerGetter peerGetter
 	r          Raft
-	id         types.ID
+	id         types.ID  // local member id
 	cid        types.ID
 }
 
@@ -264,9 +277,13 @@ func (h *streamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var t streamType
+
+	// /raft/stream/message/{PeerID}
 	switch path.Dir(r.URL.Path) {
+	// /raft/stream/msgapp
 	case streamTypeMsgAppV2.endpoint():
 		t = streamTypeMsgAppV2
+	// /raft/stream/message
 	case streamTypeMessage.endpoint():
 		t = streamTypeMessage
 	default:

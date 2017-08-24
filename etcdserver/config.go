@@ -54,7 +54,7 @@ type ServerConfig struct {
 
 	AutoCompactionRetention int
 	QuotaBackendBytes       int64
-
+	// 避免增删节点，造成集群不可用
 	StrictReconfigCheck bool
 
 	// ClientCertAuthEnabled is true when cert has been signed by the client CA.

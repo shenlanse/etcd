@@ -53,10 +53,13 @@ var (
 	}
 )
 
+// 保存的快照都是v2 store
+// 而mvcc不需要snapshot，他只需要将他的文件，copy一份发给follower就行了
 type Snapshotter struct {
 	dir string
 }
 
+// /data/etcd/member/snap
 func New(dir string) *Snapshotter {
 	return &Snapshotter{
 		dir: dir,
@@ -73,6 +76,7 @@ func (s *Snapshotter) SaveSnap(snapshot raftpb.Snapshot) error {
 func (s *Snapshotter) save(snapshot *raftpb.Snapshot) error {
 	start := time.Now()
 
+	// term-index.snap
 	fname := fmt.Sprintf("%016x-%016x%s", snapshot.Metadata.Term, snapshot.Metadata.Index, snapSuffix)
 	b := pbutil.MustMarshal(snapshot)
 	crc := crc32.Update(0, crcTable, b)

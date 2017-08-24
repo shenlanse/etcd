@@ -19,6 +19,7 @@ import (
 	"time"
 )
 
+// 彻底将k-v从backend删除，同时设置meta bucket中的finishedCompactRev为compactMainRev
 func (s *store) scheduleCompaction(compactMainRev int64, keep map[revision]struct{}) bool {
 	totalStart := time.Now()
 	defer dbCompactionTotalDurations.Observe(float64(time.Since(totalStart) / time.Millisecond))
@@ -43,6 +44,7 @@ func (s *store) scheduleCompaction(compactMainRev int64, keep map[revision]struc
 			}
 		}
 
+		// < 说明已经遍历到末尾了
 		if len(keys) < int(batchsize) {
 			rbytes := make([]byte, 8+1+8)
 			revToBytes(revision{main: compactMainRev}, rbytes)

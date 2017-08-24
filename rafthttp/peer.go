@@ -88,6 +88,7 @@ type Peer interface {
 // a optimized stream for sending msgApp since msgApp accounts for large part
 // of all messages. Only raft leader uses the optimized stream to send msgApp
 // to the remote follower node.
+//
 // A pipeline is a series of http clients that send http requests to the remote.
 // It is only used when the stream has not been established.
 type peer struct {
@@ -116,6 +117,7 @@ type peer struct {
 	stopc  chan struct{}
 }
 
+// remote peerID
 func startPeer(transport *Transport, urls types.URLs, peerID types.ID, fs *stats.FollowerStats) *peer {
 	plog.Infof("starting peer %s...", peerID)
 	defer plog.Infof("started peer %s", peerID)
@@ -124,6 +126,8 @@ func startPeer(transport *Transport, urls types.URLs, peerID types.ID, fs *stats
 	picker := newURLPicker(urls)
 	errorc := transport.ErrorC
 	r := transport.Raft
+
+	// 启动了N个协程，往remote peer发送message
 	pipeline := &pipeline{
 		peerID:        peerID,
 		tr:            transport,
@@ -135,11 +139,13 @@ func startPeer(transport *Transport, urls types.URLs, peerID types.ID, fs *stats
 	}
 	pipeline.start()
 
+	//
 	p := &peer{
 		id:             peerID,
 		r:              r,
 		status:         status,
 		picker:         picker,
+		// 往outgoingConn不断write message
 		msgAppV2Writer: startStreamWriter(peerID, status, fs, r),
 		writer:         startStreamWriter(peerID, status, fs, r),
 		pipeline:       pipeline,
@@ -151,6 +157,8 @@ func startPeer(transport *Transport, urls types.URLs, peerID types.ID, fs *stats
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
+
+	// 数据来自于streamReader
 	go func() {
 		for {
 			select {
@@ -180,6 +188,8 @@ func startPeer(transport *Transport, urls types.URLs, peerID types.ID, fs *stats
 		}
 	}()
 
+
+	// stream reader will get message from remote peer and add it into peer.propc or peer.recvc
 	p.msgAppV2Reader = &streamReader{
 		peerID: peerID,
 		typ:    streamTypeMsgAppV2,

@@ -31,10 +31,14 @@ type raftLog struct {
 
 	// committed is the highest log position that is known to be in
 	// stable storage on a quorum of nodes.
+	// 收到半数以上的回复就认为是committed
 	committed uint64
+
 	// applied is the highest log position that the application has
 	// been instructed to apply to its state machine.
+	//
 	// Invariant: applied <= committed
+	// 应用到状态机，即持久化到底层存储
 	applied uint64
 
 	logger Logger
@@ -50,18 +54,23 @@ func newLog(storage Storage, logger Logger) *raftLog {
 		storage: storage,
 		logger:  logger,
 	}
+	// 1
 	firstIndex, err := storage.FirstIndex()
 	if err != nil {
 		panic(err) // TODO(bdarnell)
 	}
+	// 0
 	lastIndex, err := storage.LastIndex()
 	if err != nil {
 		panic(err) // TODO(bdarnell)
 	}
+	// 1
 	log.unstable.offset = lastIndex + 1
 	log.unstable.logger = logger
 	// Initialize our committed and applied pointers to the time of the last compaction.
+	// 0
 	log.committed = firstIndex - 1
+	// 0
 	log.applied = firstIndex - 1
 
 	return log
@@ -73,6 +82,7 @@ func (l *raftLog) String() string {
 
 // maybeAppend returns (0, false) if the entries cannot be appended. Otherwise,
 // it returns (last index of new entries, true).
+// leader发送AppendEntries给follower时，会带上需要复制的log entry前一个log entry的(index, iterm)
 func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
 	if l.matchTerm(index, logTerm) {
 		lastnewi = index + uint64(len(ents))
@@ -85,6 +95,8 @@ func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry
 			offset := index + 1
 			l.append(ents[ci-offset:]...)
 		}
+		// 因为这个可能是一个比较慢的follower，还没有收到最新的entry
+		// 也就是说，虽然leader告诉他当前commit index， 但是follower还并没有收到相应的entry
 		l.commitTo(min(committed, lastnewi))
 		return lastnewi, true
 	}
@@ -340,7 +352,7 @@ func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
 	}
 
 	length := l.lastIndex() + 1 - fi
-	if lo < fi || hi > fi+length {
+	if hi > fi+length {
 		l.logger.Panicf("slice[%d,%d) out of bound [%d,%d]", lo, hi, fi, l.lastIndex())
 	}
 	return nil

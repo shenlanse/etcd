@@ -32,6 +32,7 @@ type eventBatch struct {
 	// evs is a batch of revision-ordered events
 	evs []mvccpb.Event
 	// revs is the minimum unique revisions observed for this batch
+	// 具体是代表什么呢？
 	revs int
 	// moreRev is first revision with more events following this batch
 	moreRev int64
@@ -53,6 +54,7 @@ func (eb *eventBatch) add(ev mvccpb.Event) {
 	// revision accounting
 	ebRev := eb.evs[len(eb.evs)-1].Kv.ModRevision
 	evRev := ev.Kv.ModRevision
+	// 可能会相等
 	if evRev > ebRev {
 		eb.revs++
 		if eb.revs > watchBatchMaxRevs {

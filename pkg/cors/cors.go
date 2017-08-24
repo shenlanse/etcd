@@ -23,6 +23,12 @@ import (
 	"strings"
 )
 
+// 跨域资源共享
+// http://www.ruanyifeng.com/blog/2016/04/cors.html
+// https://www.alibabacloud.com/help/zh/doc-detail/31928.htm
+
+// CORS使用一定是在使用浏览器的情况下，因为控制访问权限的是浏览器而非服务器。因此使用其它的客户端的时候无需关心任何跨域问题。
+
 type CORSInfo map[string]bool
 
 // Set implements the flag.Value interface to allow users to define a list of CORS origins

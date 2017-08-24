@@ -144,8 +144,12 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 		for {
 			select {
 			case <-r.ticker:
+				// node.Tick()
 				r.Tick()
-			case rd := <-r.Ready():
+
+			case rd := <-r.Ready(): // node.Ready
+
+				// softState 主要就是看看是不是leader
 				if rd.SoftState != nil {
 					if lead := atomic.LoadUint64(&r.lead); rd.SoftState.Lead != raft.None && lead != rd.SoftState.Lead {
 						r.mu.Lock()
@@ -177,8 +181,10 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				raftDone := make(chan struct{}, 1)
 				ap := apply{
-					entries:  rd.CommittedEntries,
+					entries: rd.CommittedEntries,
+					// 这个snapshot是怎么来的
 					snapshot: rd.Snapshot,
+					// raftDone chan是想保证什么时序
 					raftDone: raftDone,
 				}
 
@@ -195,10 +201,13 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				// For more details, check raft thesis 10.2.1
 				if islead {
 					// gofail: var raftBeforeLeaderSend struct{}
+					// 发送给其他peer
+					// 异步非阻塞的
 					r.sendMessages(rd.Messages)
 				}
 
 				// gofail: var raftBeforeSave struct{}
+				// 写到wal中去
 				if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
 					plog.Fatalf("raft save state and entries error: %v", err)
 				}
@@ -207,6 +216,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				}
 				// gofail: var raftAfterSave struct{}
 
+				// snap一方面要写到wal中去，一方面要写到snap文件中
 				if !raft.IsEmptySnap(rd.Snapshot) {
 					// gofail: var raftBeforeSaveSnap struct{}
 					if err := r.storage.SaveSnap(rd.Snapshot); err != nil {
@@ -218,13 +228,21 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					// gofail: var raftAfterApplySnap struct{}
 				}
 
+				// rd.Entries存的是unstable.entries
 				r.raftStorage.Append(rd.Entries)
 
 				if !islead {
 					// gofail: var raftBeforeFollowerSend struct{}
 					r.sendMessages(rd.Messages)
 				}
+
+				// wait for the raft routine to finish the disk writes before triggering a
+				// snapshot. or applied index might be greater than the last index in raft
+				// storage, since the raft routine might be slower than apply routine.
+				// <-apply.raftDone
 				raftDone <- struct{}{}
+
+				//
 				r.Advance()
 			case <-r.stopped:
 				return
@@ -250,11 +268,13 @@ func (r *raftNode) sendMessages(ms []raftpb.Message) {
 	sentAppResp := false
 	for i := len(ms) - 1; i >= 0; i-- {
 		if r.isIDRemoved(ms[i].To) {
+			// will not send
 			ms[i].To = 0
 		}
 
 		if ms[i].Type == raftpb.MsgAppResp {
 			if sentAppResp {
+				// will not send
 				ms[i].To = 0
 			} else {
 				sentAppResp = true
@@ -271,6 +291,7 @@ func (r *raftNode) sendMessages(ms []raftpb.Message) {
 			default:
 				// drop msgSnap if the inflight chan if full.
 			}
+			// will not send
 			ms[i].To = 0
 		}
 		if ms[i].Type == raftpb.MsgHeartbeat {

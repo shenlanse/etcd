@@ -40,7 +40,8 @@ type Compactable interface {
 type RevGetter interface {
 	Rev() int64
 }
-
+// 压缩历史数据主要有两种策略：一种是只保留历史数据X个小时
+// 一种是直接按照历史版本号，compact，之前的都被删除
 type Periodic struct {
 	clock        clockwork.Clock
 	periodInHour int
@@ -56,6 +57,8 @@ type Periodic struct {
 	paused bool
 }
 
+// 需要经过raft
+// 只有leader会运行这个compact，raftReadyHandler.updateLeadership
 func NewPeriodic(h int, rg RevGetter, c Compactable) *Periodic {
 	return &Periodic{
 		clock:        clockwork.NewRealClock(),
@@ -112,6 +115,7 @@ func (t *Periodic) Stop() {
 	t.cancel()
 }
 
+// follower会pause掉这个compactor，数据压缩只让leader触发
 func (t *Periodic) Pause() {
 	t.mu.Lock()
 	defer t.mu.Unlock()

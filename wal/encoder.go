@@ -29,8 +29,17 @@ import (
 // walPageBytes is the alignment for flushing records to the backing Writer.
 // It should be a multiple of the minimum sector size so that WAL can safely
 // distinguish between torn writes and ordinary data corruption.
+// 4kB
 const walPageBytes = 8 * minSectorSize
 
+// 有几种类型的record：
+/*
+	metadataType
+	entryType
+	stateType
+	crcType
+	snapshotType
+*/
 type encoder struct {
 	mu sync.Mutex
 	bw *ioutil.PageWriter
@@ -70,7 +79,7 @@ func (e *encoder) encode(rec *walpb.Record) error {
 		err  error
 		n    int
 	)
-
+	// 存到buf中就不需要再次申请空间。空间复杂度低、并且利于GC
 	if rec.Size() > len(e.buf) {
 		data, err = rec.Marshal()
 		if err != nil {

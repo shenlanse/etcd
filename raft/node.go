@@ -197,10 +197,12 @@ func StartNode(c *Config, peers []Peer) Node {
 	// entries since they have already been committed).
 	// We do not set raftLog.applied so the application will be able
 	// to observe all conf changes via Ready.CommittedEntries.
+	// 初始化progress
 	for _, peer := range peers {
 		r.addNode(peer.ID)
 	}
 
+	//
 	n := newNode()
 	n.logger = c.Logger
 	go n.run(r)
@@ -221,6 +223,7 @@ func RestartNode(c *Config) Node {
 }
 
 // node is the canonical implementation of the Node interface
+// 一堆channel，异步通信
 type node struct {
 	propc      chan pb.Message
 	recvc      chan pb.Message
@@ -368,14 +371,19 @@ func (n *node) run(r *raft) {
 			r.readStates = nil
 			advancec = n.advancec
 		case <-advancec:
+			// 调用了Advance之后，会执行这里
+			// 那么什么时候执行的Advance呢，是从readyc弹出了一个ready，处理完了之后
 			if prevHardSt.Commit != 0 {
 				r.raftLog.appliedTo(prevHardSt.Commit)
 			}
 			if havePrevLastUnstablei {
+				// 删除unstable之前的entry
 				r.raftLog.stableTo(prevLastUnstablei, prevLastUnstablet)
 				havePrevLastUnstablei = false
 			}
+			// 把unstable.snap置空
 			r.raftLog.stableSnapTo(prevSnapi)
+			// 把advancec置为空，从而进行下一次循环时，能拿到新的Ready数据
 			advancec = nil
 		case c := <-n.status:
 			c <- getStatus(r)
@@ -501,16 +509,26 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 
 func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
+		// 存到MemoryStorage中，存到wal中去
 		Entries:          r.raftLog.unstableEntries(),
+		// 已经commit，但是还没有apply的entry
+		// 会被应用到状态机中
 		CommittedEntries: r.raftLog.nextEnts(),
+		// mailbox
 		Messages:         r.msgs,
 	}
+
+	//
 	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
 		rd.SoftState = softSt
 	}
+
+	//
 	if hardSt := r.hardState(); !isHardStateEqual(hardSt, prevHardSt) {
 		rd.HardState = hardSt
 	}
+
+	//
 	if r.raftLog.unstable.snapshot != nil {
 		rd.Snapshot = *r.raftLog.unstable.snapshot
 	}

@@ -71,14 +71,22 @@ type TTLOptionSet struct {
 }
 
 type store struct {
+	// node is the basic element in the store system
+	// 根节点
 	Root           *node
+	// 记录历史事件和watcher
 	WatcherHub     *watcherHub
+	//
 	CurrentIndex   uint64
+	// 记录各种统计变量
 	Stats          *Stats
+	// 初始值为2
 	CurrentVersion int
+	// 过期时间相关的小顶堆
 	ttlKeyHeap     *ttlKeyHeap  // need to recovery manually
 	worldLock      sync.RWMutex // stop the world lock
 	clock          clockwork.Clock
+	// '/0'  '/1'  '/'
 	readonlySet    types.Set
 }
 

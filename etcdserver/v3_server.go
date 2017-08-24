@@ -274,6 +274,7 @@ func (s *EtcdServer) Compact(ctx context.Context, r *pb.CompactionRequest) (*pb.
 	return resp, nil
 }
 
+// 需要经过raft
 func (s *EtcdServer) LeaseGrant(ctx context.Context, r *pb.LeaseGrantRequest) (*pb.LeaseGrantResponse, error) {
 	// no id given? choose one
 	for r.ID == int64(lease.NoLease) {
@@ -290,6 +291,7 @@ func (s *EtcdServer) LeaseGrant(ctx context.Context, r *pb.LeaseGrantRequest) (*
 	return result.resp.(*pb.LeaseGrantResponse), nil
 }
 
+// 需要经过raft
 func (s *EtcdServer) LeaseRevoke(ctx context.Context, r *pb.LeaseRevokeRequest) (*pb.LeaseRevokeResponse, error) {
 	result, err := s.processInternalRaftRequestOnce(ctx, pb.InternalRaftRequest{LeaseRevoke: r})
 	if err != nil {
@@ -301,6 +303,7 @@ func (s *EtcdServer) LeaseRevoke(ctx context.Context, r *pb.LeaseRevokeRequest) 
 	return result.resp.(*pb.LeaseRevokeResponse), nil
 }
 
+// 转发给leader，不经过raft
 func (s *EtcdServer) LeaseRenew(ctx context.Context, id lease.LeaseID) (int64, error) {
 	ttl, err := s.lessor.Renew(id)
 	if err == nil { // already requested to primary lessor(leader)
@@ -330,6 +333,7 @@ func (s *EtcdServer) LeaseRenew(ctx context.Context, id lease.LeaseID) (int64, e
 	return -1, ErrTimeout
 }
 
+// 获取lease的详细信息
 func (s *EtcdServer) LeaseTimeToLive(ctx context.Context, r *pb.LeaseTimeToLiveRequest) (*pb.LeaseTimeToLiveResponse, error) {
 	if s.Leader() == s.ID() {
 		// primary; timetolive directly from leader
@@ -680,11 +684,13 @@ func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.In
 	defer cancel()
 
 	start := time.Now()
+	// 交给raft状态机进行处理
 	s.r.Propose(cctx, data)
 	proposalsPending.Inc()
 	defer proposalsPending.Dec()
 
 	select {
+	// 执行成功。 apply之后会执行trigger函数，将执行结果放到ch中
 	case x := <-ch:
 		return x.(*applyResult), nil
 	case <-cctx.Done():
@@ -733,6 +739,7 @@ func (s *EtcdServer) linearizableReadLoop() {
 		s.readMu.Unlock()
 
 		cctx, cancel := context.WithTimeout(context.Background(), s.Cfg.ReqTimeout())
+		// ctx是一个ID
 		if err := s.r.ReadIndex(cctx, ctx); err != nil {
 			cancel()
 			if err == raft.ErrStopped {

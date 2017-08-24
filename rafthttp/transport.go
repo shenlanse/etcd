@@ -139,13 +139,23 @@ func (t *Transport) Start() error {
 }
 
 func (t *Transport) Handler() http.Handler {
+	// The handler reads out the raft message from request body,
+	// and forwards it to the given raft state machine for processing.
 	pipelineHandler := newPipelineHandler(t, t.Raft, t.ClusterID)
+
+	//
 	streamHandler := newStreamHandler(t, t, t.Raft, t.ID, t.ClusterID)
+
+	//
 	snapHandler := newSnapshotHandler(t, t.Raft, t.Snapshotter, t.ClusterID)
 	mux := http.NewServeMux()
+	// /raft
 	mux.Handle(RaftPrefix, pipelineHandler)
+	// /raft/stream
 	mux.Handle(RaftStreamPrefix+"/", streamHandler)
+	// /raft/snapshot
 	mux.Handle(RaftSnapshotPrefix, snapHandler)
+	// /raft/probing
 	mux.Handle(ProbingPrefix, probing.NewHandler())
 	return mux
 }

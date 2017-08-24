@@ -74,15 +74,18 @@ func init() {
 // Config holds the arguments for configuring an etcd server.
 type Config struct {
 	// member
-
+	// 跨域资源共享
 	CorsInfo                *cors.CORSInfo
 	LPUrls, LCUrls          []url.URL
 	Dir                     string `json:"data-dir"`
 	WalDir                  string `json:"wal-dir"`
 	MaxSnapFiles            uint   `json:"max-snapshots"`
 	MaxWalFiles             uint   `json:"max-wals"`
+	// Human-readable name for this member
 	Name                    string `json:"name"`
+	// 用于触发自动打快照的
 	SnapCount               uint64 `json:"snapshot-count"`
+	// 保留几个小时的历史
 	AutoCompactionRetention int    `json:"auto-compaction-retention"`
 
 	// TickMs is the number of milliseconds between heartbeat ticks.
@@ -90,6 +93,7 @@ type Config struct {
 	// make ticks a cluster wide configuration.
 	TickMs            uint  `json:"heartbeat-interval"`
 	ElectionMs        uint  `json:"election-timeout"`
+	// 默认2GB, 最大8GB
 	QuotaBackendBytes int64 `json:"quota-backend-bytes"`
 
 	// clustering
@@ -98,6 +102,7 @@ type Config struct {
 	ClusterState        string `json:"initial-cluster-state"`
 	DNSCluster          string `json:"discovery-srv"`
 	Dproxy              string `json:"discovery-proxy"`
+	// 服务发现的方式，启动集群
 	Durl                string `json:"discovery"`
 	InitialCluster      string `json:"initial-cluster"`
 	InitialClusterToken string `json:"initial-cluster-token"`
@@ -176,6 +181,7 @@ func NewConfig() *Config {
 		StrictReconfigCheck: true,
 		Metrics:             "basic",
 	}
+	// AdvertisePeerURLs
 	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
 	return cfg
 }

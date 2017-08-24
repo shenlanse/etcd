@@ -80,6 +80,7 @@ func mustSaveMemberToStore(s store.Store, m *Member) {
 	if err != nil {
 		plog.Panicf("marshal raftAttributes should never fail: %v", err)
 	}
+	// /members/{id}/raftAttributes
 	p := path.Join(MemberStoreKey(m.ID), raftAttributesSuffix)
 	if _, err := s.Create(p, false, string(b), false, store.TTLOptionSet{ExpireTime: store.Permanent}); err != nil {
 		plog.Panicf("create raftAttributes should never fail: %v", err)

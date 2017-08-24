@@ -50,6 +50,7 @@ func NewStorage(w *wal.WAL, s *snap.Snapshotter) Storage {
 
 // SaveSnap saves the snapshot to disk and release the locked
 // wal files since they will not be used.
+// 保存v2快照有两个场景，一个是收到了leader发过来的；另一个是，修改次数达到阈值，触发生成快照
 func (st *storage) SaveSnap(snap raftpb.Snapshot) error {
 	walsnap := walpb.Snapshot{
 		Index: snap.Metadata.Index,

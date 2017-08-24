@@ -40,12 +40,15 @@ const (
 
 var errStopped = errors.New("stopped")
 
+// 一般来说pipeline是用来发送快照的
+// streamWriter是用来发送普通message的
 type pipeline struct {
 	peerID types.ID
 
 	tr     *Transport
 	picker *urlPicker
 	status *peerStatus
+	// actually it is etcdserver
 	raft   Raft
 	errorc chan error
 	// deprecate when we depercate v2 API
@@ -80,6 +83,7 @@ func (p *pipeline) handle() {
 		select {
 		case m := <-p.msgc:
 			start := time.Now()
+			// /raft
 			err := p.post(pbutil.MustMarshal(&m))
 			end := time.Now()
 
@@ -89,8 +93,10 @@ func (p *pipeline) handle() {
 				if m.Type == raftpb.MsgApp && p.followerStats != nil {
 					p.followerStats.Fail()
 				}
+				// raft状态机的状态转变为probe
 				p.raft.ReportUnreachable(m.To)
 				if isMsgSnap(m) {
+					// 更新raft状态机的状态以及progress
 					p.raft.ReportSnapshot(m.To, raft.SnapshotFailure)
 				}
 				sentFailures.WithLabelValues(types.ID(m.To).String()).Inc()
@@ -102,6 +108,7 @@ func (p *pipeline) handle() {
 				p.followerStats.Succ(end.Sub(start))
 			}
 			if isMsgSnap(m) {
+				// 更新raft状态机的状态以及progress
 				p.raft.ReportSnapshot(m.To, raft.SnapshotFinish)
 			}
 			sentBytes.WithLabelValues(types.ID(m.To).String()).Add(float64(m.Size()))

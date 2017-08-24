@@ -141,6 +141,7 @@ func (ki *keyIndex) get(atRev int64) (modified, created revision, ver int64, err
 // since returns revisions since the given rev. Only the revision with the
 // largest sub revision will be returned if multiple revisions have the same
 // main revision.
+// 同一个事务里面，不能对同一个key进行两次PUT操作？为什么
 func (ki *keyIndex) since(rev int64) []revision {
 	if ki.isEmpty() {
 		plog.Panicf("store.keyindex: unexpected get on empty keyIndex %s", string(ki.key))

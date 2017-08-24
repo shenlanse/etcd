@@ -38,6 +38,7 @@ var (
 	fallbackFlagExit  = "exit"
 	fallbackFlagProxy = "proxy"
 
+	// 不再支持的参数
 	ignored = []string{
 		"cluster-active-size",
 		"cluster-remove-delay",
@@ -100,10 +101,12 @@ func newConfig() *config {
 	}
 	cfg.configFlags = configFlags{
 		FlagSet: flag.NewFlagSet("etcd", flag.ContinueOnError),
+		// 参数只能取这两个值
 		clusterState: flags.NewStringsFlag(
 			embed.ClusterStateFlagNew,
 			embed.ClusterStateFlagExisting,
 		),
+
 		fallback: flags.NewStringsFlag(
 			fallbackFlagExit,
 			fallbackFlagProxy,
@@ -126,6 +129,7 @@ func newConfig() *config {
 	fs.Var(cfg.CorsInfo, "cors", "Comma-separated white list of origins for CORS (cross-origin resource sharing).")
 	fs.StringVar(&cfg.Dir, "data-dir", cfg.Dir, "Path to the data directory.")
 	fs.StringVar(&cfg.WalDir, "wal-dir", cfg.WalDir, "Path to the dedicated wal directory.")
+	// lookup赋值
 	fs.Var(flags.NewURLsValue(embed.DefaultListenPeerURLs), "listen-peer-urls", "List of URLs to listen on for peer traffic.")
 	fs.Var(flags.NewURLsValue(embed.DefaultListenClientURLs), "listen-client-urls", "List of URLs to listen on for client traffic.")
 	fs.UintVar(&cfg.MaxSnapFiles, "max-snapshots", cfg.MaxSnapFiles, "Maximum number of snapshot files to retain (0 is unlimited).")

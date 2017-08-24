@@ -29,8 +29,10 @@ import (
 
 const minSectorSize = 512
 
+// 熟悉buffer reader和buffer writer的实现原理
 type decoder struct {
 	mu  sync.Mutex
+	// 即多个wal文件，最新的wal文件在末尾
 	brs []*bufio.Reader
 
 	// lastValidOff file offset following the last valid decoded record
@@ -41,6 +43,7 @@ type decoder struct {
 func newDecoder(r ...io.Reader) *decoder {
 	readers := make([]*bufio.Reader, len(r))
 	for i := range r {
+		// buf reader，加了个缓存，预读文件到内存中
 		readers[i] = bufio.NewReader(r[i])
 	}
 	return &decoder{

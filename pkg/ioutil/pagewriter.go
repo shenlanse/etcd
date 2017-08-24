@@ -27,6 +27,7 @@ type PageWriter struct {
 	// pageOffset tracks the page offset of the base of the buffer
 	pageOffset int
 	// pageBytes is the number of bytes per page
+	// 4KB
 	pageBytes int
 	// bufferedBytes counts the number of bytes pending for write in the buffer
 	bufferedBytes int
@@ -40,17 +41,21 @@ type PageWriter struct {
 
 // NewPageWriter creates a new PageWriter. pageBytes is the number of bytes
 // to write per page. pageOffset is the starting offset of io.Writer.
+// 既然是加了一个page buf，那么发生进程异常退出的话，很容易导致数据没有及时flush到磁盘上，数据丢失
 func NewPageWriter(w io.Writer, pageBytes, pageOffset int) *PageWriter {
 	return &PageWriter{
 		w:                 w,
 		pageOffset:        pageOffset,
+		// 8*512 = 4KB
 		pageBytes:         pageBytes,
 		buf:               make([]byte, defaultBufferBytes+pageBytes),
+		// 128*1024
 		bufWatermarkBytes: defaultBufferBytes,
 	}
 }
 
 func (pw *PageWriter) Write(p []byte) (n int, err error) {
+	// 如果说写入这个数据没有触到水位，那么直接写到buffer即可
 	if len(p)+pw.bufferedBytes <= pw.bufWatermarkBytes {
 		// no overflow
 		copy(pw.buf[pw.bufferedBytes:], p)
@@ -58,6 +63,9 @@ func (pw *PageWriter) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 	// complete the slack page in the buffer if unaligned
+	// 写入这个数据会达到水位
+	// 差多少字节到一页
+	// 凑出完整的一页，写入buffer。然后下面会flush
 	slack := pw.pageBytes - ((pw.pageOffset + pw.bufferedBytes) % pw.pageBytes)
 	if slack != pw.pageBytes {
 		partial := slack > len(p)

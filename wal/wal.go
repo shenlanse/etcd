@@ -35,6 +35,7 @@ import (
 )
 
 const (
+	// 一共有这五种类型的record
 	metadataType int64 = iota + 1
 	entryType
 	stateType
@@ -48,10 +49,10 @@ const (
 
 var (
 	// SegmentSizeBytes is the preallocated size of each wal segment file.
-	// The actual size might be larger than this. In general, the default
-	// value should be used, but this is defined as an exported variable
-	// so that tests can set a different segment size.
-	SegmentSizeBytes int64 = 64 * 1000 * 1000 // 64MB
+	// The actual size might be larger than this.
+	// In general, the default value should be used, but this is defined as
+	// an exported variable so that tests can set a different segment size.
+	SegmentSizeBytes int64 = 64 * 1000 * 1000 // 约等于62MB
 
 	plog = capnslog.NewPackageLogger("github.com/coreos/etcd", "wal")
 
@@ -68,21 +69,26 @@ var (
 // A newly created WAL is in append mode, and ready for appending records.
 // A just opened WAL is in read mode, and ready for reading records.
 // The WAL will be ready for appending after reading out all the previous records.
+
+// 首先要明白 stateType 和 snapshotType record分别是用来干啥的，什么时候用
 type WAL struct {
 	dir string // the living directory of the underlay files
 
 	// dirFile is a fd for the wal directory for syncing on Rename
 	dirFile *os.File
-
+	// metadata记录了nodeId和clusterId
 	metadata []byte           // metadata recorded at the head of each WAL
+
+	// term, vote, commit
 	state    raftpb.HardState // hardstate recorded at the head of WAL
 
+	// term, index
 	start     walpb.Snapshot // snapshot to start reading
 	decoder   *decoder       // decoder to decode records
 	readClose func() error   // closer for decode reader
 
 	mu      sync.Mutex
-	enti    uint64   // index of the last entry saved to the wal
+	enti    uint64   // index of the last entry record saved to the wal
 	encoder *encoder // encoder to encode records
 
 	locks []*fileutil.LockedFile // the locked files the WAL holds (the name is increasing)
@@ -91,22 +97,26 @@ type WAL struct {
 
 // Create creates a WAL ready for appending records. The given metadata is
 // recorded at the head of each WAL file, and can be retrieved with ReadAll.
+// when start Node
 func Create(dirpath string, metadata []byte) (*WAL, error) {
 	if Exist(dirpath) {
 		return nil, os.ErrExist
 	}
 
 	// keep temporary wal directory so WAL initialization appears atomic
+	// /data/etcd/member/wal.tmp
 	tmpdirpath := path.Clean(dirpath) + ".tmp"
 	if fileutil.Exist(tmpdirpath) {
 		if err := os.RemoveAll(tmpdirpath); err != nil {
 			return nil, err
 		}
 	}
+	// /data/etcd/member/wal.tmp/
 	if err := fileutil.CreateDirAll(tmpdirpath); err != nil {
 		return nil, err
 	}
 
+	// /data/etcd/member/wal.tmp/0000000000000000-0000000000000000.wal
 	p := path.Join(tmpdirpath, walName(0, 0))
 	f, err := fileutil.LockFile(p, os.O_WRONLY|os.O_CREATE, fileutil.PrivateFileMode)
 	if err != nil {
@@ -115,34 +125,45 @@ func Create(dirpath string, metadata []byte) (*WAL, error) {
 	if _, err = f.Seek(0, os.SEEK_END); err != nil {
 		return nil, err
 	}
+	// 分配62MB空间
 	if err = fileutil.Preallocate(f.File, SegmentSizeBytes, true); err != nil {
 		return nil, err
 	}
 
 	w := &WAL{
+		// /data/etcd/member/wal
 		dir:      dirpath,
 		metadata: metadata,
 	}
+
+	// 把record写到文件中去
 	w.encoder, err = newFileEncoder(f.File, 0)
 	if err != nil {
 		return nil, err
 	}
 	w.locks = append(w.locks, f)
+
+	// 写一个crcType record
 	if err = w.saveCrc(0); err != nil {
 		return nil, err
 	}
+	// 写一个metadataType record
 	if err = w.encoder.encode(&walpb.Record{Type: metadataType, Data: metadata}); err != nil {
 		return nil, err
 	}
+	// 写一个snapshotType record
+	// 调用SaveSnapshot的时候会sync
 	if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
 		return nil, err
 	}
 
+	//
 	if w, err = w.renameWal(tmpdirpath); err != nil {
 		return nil, err
 	}
 
 	// directory was renamed; sync parent dir to persist rename
+	// /data/etcd/member/wal/
 	pdir, perr := fileutil.OpenDir(path.Dir(w.dir))
 	if perr != nil {
 		return nil, perr
@@ -163,6 +184,8 @@ func Create(dirpath string, metadata []byte) (*WAL, error) {
 // The returned WAL is ready to read and the first record will be the one after
 // the given snap. The WAL cannot be appended to before reading out all of its
 // previous records.
+// 什么时候需要open wal目录?
+// 重启etcd，从快照和wal恢复
 func Open(dirpath string, snap walpb.Snapshot) (*WAL, error) {
 	w, err := openAtIndex(dirpath, snap, true)
 	if err != nil {
@@ -264,6 +287,7 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 		switch rec.Type {
 		case entryType:
 			e := mustUnmarshalEntry(rec.Data)
+			// 小于等于他的已经被保存到快照中了
 			if e.Index > w.start.Index {
 				ents = append(ents[:e.Index-w.start.Index-1], e)
 			}
@@ -271,6 +295,7 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 		case stateType:
 			state = mustUnmarshalState(rec.Data)
 		case metadataType:
+			// metadata记录的是nodeId和clusterId
 			if metadata != nil && !bytes.Equal(metadata, rec.Data) {
 				state.Reset()
 				return nil, state, nil, ErrMetadataConflict
@@ -543,6 +568,7 @@ func (w *WAL) saveState(s *raftpb.HardState) error {
 	return w.encoder.encode(rec)
 }
 
+// 这是代表什么意思呢？这两个参数
 func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

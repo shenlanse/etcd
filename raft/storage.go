@@ -77,9 +77,10 @@ type MemoryStorage struct {
 	// goroutine.
 	sync.Mutex
 
-	hardState pb.HardState
+	hardState pb.HardState // term vote and commit
 	snapshot  pb.Snapshot
 	// ents[i] has raft log position i+snapshot.Metadata.Index
+	// 所以第一个是dummy entry，有什么作用呢
 	ents []pb.Entry
 }
 
@@ -87,6 +88,7 @@ type MemoryStorage struct {
 func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{
 		// When starting from scratch populate the list with a dummy entry at term zero.
+		// 长度是1，所以append的话，会从index=1的地方开始
 		ents: make([]pb.Entry, 1),
 	}
 }
@@ -109,6 +111,7 @@ func (ms *MemoryStorage) Entries(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	ms.Lock()
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
+	// 因为第一个是dummy entry，所以不能=
 	if lo <= offset {
 		return nil, ErrCompacted
 	}
@@ -169,6 +172,7 @@ func (ms *MemoryStorage) Snapshot() (pb.Snapshot, error) {
 
 // ApplySnapshot overwrites the contents of this Storage object with
 // those of the given snapshot.
+// 从unstable那边拿到的snapshot，unstable貌似是从leader收到的
 func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 	ms.Lock()
 	defer ms.Unlock()
@@ -181,6 +185,7 @@ func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 	}
 
 	ms.snapshot = snap
+	// 放置了一个和snapshot index相同的dummy entry
 	ms.ents = []pb.Entry{{Term: snap.Metadata.Term, Index: snap.Metadata.Index}}
 	return nil
 }
@@ -189,6 +194,8 @@ func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 // can be used to reconstruct the state at that point.
 // If any configuration changes have been made since the last compaction,
 // the result of the last ApplyConfChange must be passed in.
+// 当距离上次打快照的index开始到当前applyedIndex，超过一定上限，即更改数据库的次数超过一定上限，就会触发打快照
+// 将快照保存在MemoryStorage、wal以及本地snap文件中
 func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte) (pb.Snapshot, error) {
 	ms.Lock()
 	defer ms.Unlock()
@@ -213,6 +220,9 @@ func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte)
 // Compact discards all log entries prior to compactIndex.
 // It is the application's responsibility to not attempt to compact an index
 // greater than raftLog.applied.
+// 当距离上次打快照的index开始到当前applyedIndex，超过一定上限，即更改数据库的次数超过一定上限，就会触发打快照
+// 将快照保存在MemoryStorage、wal以及本地snap文件中
+// 然后就会压缩
 func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 	ms.Lock()
 	defer ms.Unlock()
@@ -236,6 +246,7 @@ func (ms *MemoryStorage) Compact(compactIndex uint64) error {
 // Append the new entries to storage.
 // TODO (xiangli): ensure the entries are continuous and
 // entries[0].Index > ms.entries[0].Index
+// 参数entries是从unstable那边拿到的
 func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 	if len(entries) == 0 {
 		return nil
@@ -264,6 +275,7 @@ func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 	case uint64(len(ms.ents)) == offset:
 		ms.ents = append(ms.ents, entries...)
 	default:
+		// 中间不能遗漏index，必须是连续的
 		raftLogger.Panicf("missing log entry [last: %d, append at: %d]",
 			ms.lastIndex(), entries[0].Index)
 	}

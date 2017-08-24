@@ -129,7 +129,7 @@ func monitorLeader(s *etcdserver.EtcdServer) *streamsMap {
 					smap.mu.Lock()
 					for ss := range smap.streams {
 						if ssWithCtx, ok := ss.(serverStreamWithCtx); ok {
-							(*ssWithCtx.cancel)()
+							(*ssWithCtx).cancel()
 							<-ss.Context().Done()
 						}
 					}
